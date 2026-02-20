@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+"""
+Redmine からポーリングして未処理 journal を検出し、
+パターン判定・Teams 通知・Box 処理まで一貫して実行する。
+"""
+
+import json
+import logging
+import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+from .box.link_extractor import extract_box_links
+from .box.shared_item import SharedItemResolver
+from .box.zip_downloader import ZipDownloader
+from .extractor import extract_zip, write_meta
+from .pattern_matcher import PatternMatcher
+from .redmine_client import RedmineClient
+from .state_store import StateStore
+from .teams.notifier import TeamsNotifier
+
+logger = logging.getLogger(__name__)
+
+
+class JournalWatcher:
+    """メインのポーリング・処理ループ。"""
+
+    def __init__(
+        self,
+        cfg: Any,
+        store: StateStore,
+        redmine: RedmineClient,
+        matcher: PatternMatcher,
+        notifier: TeamsNotifier,
+    ) -> None:
+        self._cfg = cfg
+        self._store = store
+        self._redmine = redmine
+        self._matcher = matcher
+        self._notifier = notifier
+
+    # ------------------------------------------------------------------
+    # Public: 1回の処理サイクル
+    # ------------------------------------------------------------------
+
+    def run_once(self) -> None:
+        """1 回のポーリングサイクルを実行する。"""
+        logger.info("--- Poll cycle start ---")
+        self._detect_and_notify()
+        self._process_work_decisions()
+        logger.info("--- Poll cycle end ---")
+
+    # ------------------------------------------------------------------
+    # Step 1: 新規 journal の検出と通知
+    # ------------------------------------------------------------------
+
+    def _detect_and_notify(self) -> None:
+        try:
+            issues = self._redmine.get_updated_issues(
+                self._cfg.redmine_project_id,
+                limit=self._cfg.issue_fetch_limit,
+            )
+        except Exception as exc:
+            logger.error("Failed to fetch issues: %s", exc)
+            return
+
+        for issue_summary in issues:
+            issue_id: int = issue_summary["id"]
+            try:
+                issue = self._redmine.get_issue_with_journals(issue_id)
+            except Exception as exc:
+                logger.error("Failed to fetch issue %d: %s", issue_id, exc)
+                continue
+
+            journals: list[dict[str, Any]] = issue.get("journals", [])
+            for journal in journals:
+                self._process_journal(issue, journal)
+
+    def _process_journal(
+        self, issue: dict[str, Any], journal: dict[str, Any]
+    ) -> None:
+        journal_id: int = journal["id"]
+
+        if self._store.exists(journal_id):
+            return  # 冪等性：既処理スキップ
+
+        issue_id: int = issue["id"]
+        ticket_url = f"{self._cfg.redmine_base_url}/issues/{issue_id}"
+        detected_at = datetime.now(timezone.utc).isoformat()
+
+        # スコアリング対象テキスト収集
+        notes: str = journal.get("notes", "") or ""
+        details_text = _details_to_text(journal.get("details", []))
+        subject: str = issue.get("subject", "") or ""
+        description: str = issue.get("description", "") or ""
+        full_text = "\n".join([notes, details_text, subject, description])
+
+        # Box リンク抽出
+        box_links = extract_box_links(full_text)
+        has_box = bool(box_links)
+
+        # パターン判定
+        results = self._matcher.match(
+            texts=[notes, details_text, subject, description],
+            has_box_link=has_box,
+        )
+
+        best = results[0] if results else None
+
+        self._store.insert_detected(
+            journal_id=journal_id,
+            issue_id=issue_id,
+            detected_at=detected_at,
+            ticket_url=ticket_url,
+            matched_pattern=best.pattern_id if best else None,
+            score=best.score if best else None,
+            box_links=box_links,
+        )
+
+        if best is None:
+            logger.debug(
+                "journal_id=%d score below threshold, no notification", journal_id
+            )
+            self._store.set_decision(journal_id, "skip")
+            return
+
+        # Teams 通知
+        try:
+            self._notifier.send(
+                journal_id=journal_id,
+                issue_id=issue_id,
+                ticket_url=ticket_url,
+                pattern_name=best.name,
+                score=best.score,
+                evidence=best.evidence,
+                box_links=box_links,
+            )
+            notified_at = datetime.now(timezone.utc).isoformat()
+            self._store.mark_notified(journal_id, notified_at)
+        except Exception as exc:
+            logger.error(
+                "Failed to notify Teams for journal_id=%d: %s", journal_id, exc
+            )
+            self._store.set_status(journal_id, "failed", error=str(exc))
+
+    # ------------------------------------------------------------------
+    # Step 2: work 決定済みの Box 処理
+    # ------------------------------------------------------------------
+
+    def _process_work_decisions(self) -> None:
+        rows = self._store.get_decided_work()
+        for row in rows:
+            self._handle_box_work(row)
+
+    def _handle_box_work(self, row: Any) -> None:
+        journal_id: int = row["journal_id"]
+        issue_id: int = row["issue_id"]
+        ticket_url: str = row["ticket_url"] or ""
+        matched_pattern: Optional[str] = row["matched_pattern"]
+        score: Optional[int] = row["score"]
+        box_links: list[str] = json.loads(row["box_links_json"] or "[]")
+
+        logger.info("Processing Box work: journal_id=%d", journal_id)
+        self._store.set_status(journal_id, "downloading")
+
+        # 作業ディレクトリ作成
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        work_dir = (
+            Path(self._cfg.work_root)
+            / "tickets"
+            / str(issue_id)
+            / f"{ts}_journal_{journal_id}"
+        )
+        raw_dir = work_dir / "01_raw"
+        extract_dir = work_dir / "02_extract"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+
+        # Box リンクが複数の場合は最初のものを使用
+        box_item_type: Optional[str] = None
+        box_item_id: Optional[str] = None
+        download_status = "skipped"
+        extract_status = "skipped"
+        error_summary: Optional[str] = None
+
+        if not box_links:
+            logger.warning("No Box links for journal_id=%d", journal_id)
+            self._store.set_status(
+                journal_id,
+                "failed",
+                error="No Box links found",
+                work_dir=str(work_dir),
+            )
+            write_meta(
+                work_dir, issue_id, journal_id, ticket_url,
+                matched_pattern, score, [], box_links,
+                None, None, "no_links", "skipped",
+            )
+            return
+
+        shared_link = box_links[0]
+        resolver = SharedItemResolver(
+            self._cfg.box_access_token, self._cfg.box_shared_link_password
+        )
+        downloader = ZipDownloader(
+            self._cfg.box_access_token, shared_link, self._cfg.box_shared_link_password
+        )
+
+        try:
+            item_info = resolver.resolve(shared_link)
+            box_item_type = item_info["type"]
+            box_item_id = item_info["id"]
+
+            zip_name = f"download{'.' + box_item_info_ext(box_item_type)}"
+            zip_path = downloader.download(
+                item_type=box_item_type,
+                item_id=box_item_id,
+                dest_path=raw_dir,
+                download_file_name=zip_name,
+            )
+            download_status = "ok"
+        except Exception as exc:
+            logger.error("Box download failed for journal_id=%d: %s", journal_id, exc)
+            error_summary = str(exc)
+            download_status = "failed"
+            self._store.set_status(
+                journal_id, "failed", error=error_summary, work_dir=str(work_dir)
+            )
+            write_meta(
+                work_dir, issue_id, journal_id, ticket_url,
+                matched_pattern, score, [], box_links,
+                box_item_type, box_item_id,
+                download_status, extract_status, error_summary,
+            )
+            return
+
+        # ZIP 解凍（ファイルの場合は ZIP でない可能性もある）
+        try:
+            extract_zip(zip_path, extract_dir)
+            extract_status = "ok"
+        except zipfile.BadZipFile as exc:
+            logger.error(
+                "Bad ZIP for journal_id=%d: %s", journal_id, exc
+            )
+            error_summary = f"BadZipFile: {exc}"
+            extract_status = "bad_zip"
+        except Exception as exc:
+            logger.error(
+                "Extract failed for journal_id=%d: %s", journal_id, exc
+            )
+            error_summary = str(exc)
+            extract_status = "failed"
+
+        final_status = "extracted" if extract_status == "ok" else "failed"
+        self._store.set_status(
+            journal_id, final_status, error=error_summary, work_dir=str(work_dir)
+        )
+        write_meta(
+            work_dir, issue_id, journal_id, ticket_url,
+            matched_pattern, score, [], box_links,
+            box_item_type, box_item_id,
+            download_status, extract_status, error_summary,
+        )
+        logger.info(
+            "Box work done: journal_id=%d status=%s work_dir=%s",
+            journal_id,
+            final_status,
+            work_dir,
+        )
+
+
+def _details_to_text(details: list[dict[str, Any]]) -> str:
+    """journal.details をテキスト化する。"""
+    parts: list[str] = []
+    for d in details:
+        prop = d.get("name", "")
+        old_val = d.get("old_value", "") or ""
+        new_val = d.get("new_value", "") or ""
+        parts.append(f"{prop}: {old_val} -> {new_val}")
+    return "\n".join(parts)
+
+
+def box_item_info_ext(item_type: str) -> str:
+    return "zip" if item_type == "folder" else "bin"
