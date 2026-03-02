@@ -95,6 +95,43 @@ class ZipDownloader:
     # Folder → ZIP
     # ------------------------------------------------------------------
 
+    def download_items(
+        self,
+        items: list[dict],
+        dest_path: Path,
+        download_file_name: str = "download.zip",
+    ) -> Path:
+        """複数の Box アイテムを1つの ZIP にまとめてダウンロードする。"""
+        dest_path.mkdir(parents=True, exist_ok=True)
+        create_url = f"{_BOX_API_BASE}/zip_downloads"
+        body = {
+            "download_file_name": download_file_name.replace(".zip", ""),
+            "items": [{"type": item["type"], "id": item["id"]} for item in items],
+        }
+        logger.info("Creating zip_download for %d items", len(items))
+        resp = requests.post(
+            create_url,
+            headers={**self._auth_headers(), "Content-Type": "application/json"},
+            json=body,
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+
+        download_url: str = data.get("download_url", "")
+        if not download_url:
+            raise RuntimeError(f"zip_downloads did not return download_url: {data}")
+
+        logger.info("zip_downloads download_url obtained; starting download")
+        dl_resp = requests.get(download_url, stream=True, timeout=120)
+        dl_resp.raise_for_status()
+
+        out_path = dest_path / download_file_name
+        _stream_to_file(dl_resp, out_path)
+        size = out_path.stat().st_size
+        logger.info("ZIP downloaded: %s (%d bytes, %d items)", out_path, size, len(items))
+        return out_path
+
     def _download_folder_as_zip(
         self, folder_id: str, dest_dir: Path, zip_name: str
     ) -> Path:

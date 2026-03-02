@@ -254,24 +254,16 @@ class JournalWatcher:
 
         self._store.set_status(journal_id, "downloading")
 
-        # 作業ディレクトリ作成
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        work_dir = (
-            Path(self._cfg.work_root)
-            / "tickets"
-            / str(issue_id)
-            / f"{ts}_journal_{journal_id}"
-        )
-        raw_dir = work_dir / "01_raw"
-        extract_dir = work_dir / "02_extract"
-        raw_dir.mkdir(parents=True, exist_ok=True)
+        # ダウンロード先: WORK_ROOT 直下に {issue_id}.zip
+        work_dir = Path(self._cfg.work_root)
+        raw_dir = work_dir
+        work_dir.mkdir(parents=True, exist_ok=True)
 
-        # Box リンクが複数の場合は最初のものを使用
-        box_item_type: Optional[str] = None
-        box_item_id: Optional[str] = None
         download_status = "skipped"
         extract_status = "skipped"
         error_summary: Optional[str] = None
+        box_item_type: Optional[str] = None
+        box_item_id: Optional[str] = None
 
         if not box_links:
             logger.warning("No Box links for journal_id=%d", journal_id)
@@ -288,34 +280,30 @@ class JournalWatcher:
             )
             return
 
-        shared_link = box_links[0]
-
         try:
             token = self._box_token()
-            try:
-                resolver = SharedItemResolver(token, self._cfg.box_shared_link_password)
-                item_info = resolver.resolve(shared_link)
-            except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code == 401:
-                    token = self._box_token_refresh()
+
+            # 全リンクを解決してアイテムリストを構築
+            resolved_items: list[dict] = []
+            for link in box_links:
+                try:
                     resolver = SharedItemResolver(token, self._cfg.box_shared_link_password)
-                    item_info = resolver.resolve(shared_link)
-                else:
-                    raise
+                    item_info = resolver.resolve(link)
+                except requests.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 401:
+                        token = self._box_token_refresh()
+                        resolver = SharedItemResolver(token, self._cfg.box_shared_link_password)
+                        item_info = resolver.resolve(link)
+                    else:
+                        raise
+                resolved_items.append(item_info)
 
-            box_item_type = item_info["type"]
-            box_item_id = item_info["id"]
+            box_item_type = resolved_items[0]["type"]
+            box_item_id = resolved_items[0]["id"]
 
-            # 直接URL（/folder/ID, /file/ID）では BoxApi ヘッダー不要
-            dl_shared_link = "" if item_info.get("is_direct") else shared_link
-            downloader = ZipDownloader(token, dl_shared_link, self._cfg.box_shared_link_password)
-            zip_name = f"download{'.' + box_item_info_ext(box_item_type)}"
-            zip_path = downloader.download(
-                item_type=box_item_type,
-                item_id=box_item_id,
-                dest_path=raw_dir,
-                download_file_name=zip_name,
-            )
+            # 全アイテムを1つの ZIP にまとめてダウンロード（ファイル名=チケット番号）
+            downloader = ZipDownloader(token, "", self._cfg.box_shared_link_password)
+            downloader.download_items(resolved_items, raw_dir, f"{issue_id}.zip")
             download_status = "ok"
         except Exception as exc:
             logger.error("Box download failed for journal_id=%d: %s", journal_id, exc)
