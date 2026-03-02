@@ -105,15 +105,16 @@ class StateStore:
             conn.commit()
         logger.debug("Inserted journal_id=%d", journal_id)
 
-    def get_dashboard_records(self) -> list[sqlite3.Row]:
-        """ダッシュボード表示用：スコアありのレコードを新しい順で返す。"""
+    def get_dashboard_records(self, min_score: int = 60) -> list[sqlite3.Row]:
+        """ダッシュボード表示用：min_score 以上のレコードを新しい順で返す。"""
         with self._conn() as conn:
             return conn.execute(
                 """
                 SELECT * FROM journal_events
-                WHERE score IS NOT NULL
+                WHERE score >= ?
                 ORDER BY detected_at DESC
-                """
+                """,
+                (min_score,),
             ).fetchall()
 
     def mark_notified(self, journal_id: int, notified_at: str) -> None:
