@@ -65,6 +65,8 @@ class RedmineClient:
         self, project_id: str, since: str
     ) -> list[dict[str, Any]]:
         """since（ISO8601）以降に更新された全 issue をページングで取得する。"""
+        # Redmine は YYYY-MM-DD 形式のみ受け付けるため日付部分のみ使用
+        since_date = since[:10]
         issues: list[dict[str, Any]] = []
         offset = 0
         while True:
@@ -76,7 +78,7 @@ class RedmineClient:
                     "limit": 100,
                     "offset": offset,
                     "status_id": "*",
-                    "updated_on": f">={since}",
+                    "updated_on": f">={since_date}",
                 },
             )
             page = data.get("issues", [])
@@ -85,7 +87,7 @@ class RedmineClient:
             if offset >= data.get("total_count", 0) or not page:
                 break
         logger.info(
-            "Fetched %d issues updated since %s", len(issues), since
+            "Fetched %d issues updated since %s", len(issues), since_date
         )
         return issues
 
