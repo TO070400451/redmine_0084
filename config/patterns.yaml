@@ -16,6 +16,7 @@ patterns:
     name: "BTS/GtsEdiHostTestCases 試験結果通知"
     description: "5ワード全て含まれる場合に通知"
     validate_box: false
+    download_mode: bts_gts  # link[0]=BTS(ZIP直DL), link[1]=GTS(2階層上から再帰DL)
     keywords:
       must:
         - "大橋様"

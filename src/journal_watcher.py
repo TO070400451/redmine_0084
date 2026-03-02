@@ -18,6 +18,7 @@ from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
 from .box.token_manager import TokenManager
 from .box.validator import validate as validate_box
+from .box.individual_downloader import download_bts_folder, download_from_ancestor
 from .box.waiver_parser import extract_waiver_tests
 from . import dashboard, win_notifier
 from .pattern_matcher import PatternMatcher
@@ -295,12 +296,22 @@ class JournalWatcher:
             box_item_type = resolved_items[0]["type"]
             box_item_id = resolved_items[0]["id"]
 
-            # 全アイテムを1つの ZIP にまとめてダウンロード（ファイル名=チケット番号）
-            downloader = ZipDownloader(token, "", self._cfg.box_shared_link_password)
-            downloader.download_items(resolved_items, raw_dir, f"{issue_id}.zip")
+            download_mode = self._matcher.get_download_mode(matched_pattern or "")
+
+            if download_mode == "bts_gts":
+                # BTS: フォルダ直下のZIPをそのままDL
+                if len(resolved_items) >= 1:
+                    download_bts_folder(resolved_items[0]["id"], token, raw_dir)
+                # GTS: 2階層上の 03_GTS フォルダを起点に再帰DL
+                if len(resolved_items) >= 2:
+                    download_from_ancestor(resolved_items[1]["id"], token, raw_dir, parent_levels=2)
+            else:
+                # 全アイテムを1つの ZIP にまとめてダウンロード（ファイル名=チケット番号）
+                downloader = ZipDownloader(token, "", self._cfg.box_shared_link_password)
+                downloader.download_items(resolved_items, raw_dir, f"{issue_id}.zip")
             download_status = "ok"
         except Exception as exc:
-            logger.error("Box download failed for journal_id=%d: %s", journal_id, exc)
+            logger.error("Box download failed for journal_id=%d: %s", journal_id, exc, exc_info=True)
             error_summary = str(exc)
             download_status = "failed"
             self._store.set_status(

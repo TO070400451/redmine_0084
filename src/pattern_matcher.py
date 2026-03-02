@@ -94,3 +94,10 @@ class PatternMatcher:
             if pat.get("pattern_id") == pattern_id:
                 return pat.get("validate_box", True)
         return True
+
+    def get_download_mode(self, pattern_id: str) -> str:
+        """パターンの download_mode を返す（未設定なら 'zip'）。"""
+        for pat in self.patterns:
+            if pat.get("pattern_id") == pattern_id:
+                return pat.get("download_mode", "zip")
+        return "zip"
