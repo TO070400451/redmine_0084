@@ -51,9 +51,9 @@ def trigger_download(journal_id: int):
     if not row["box_links_json"] or row["box_links_json"] == "[]":
         raise HTTPException(status_code=400, detail="No Box links")
 
-    # すでに処理中・完了のものは多重実行しない
+    # 完了済みは多重実行しない。validating/downloading は中断後の再試行を許容する
     current_status = row["status"] or ""
-    if current_status in ("validating", "downloading", "extracted"):
+    if current_status == "extracted":
         return {"status": current_status, "journal_id": journal_id}
 
     # decision を work にセット（状態管理）
