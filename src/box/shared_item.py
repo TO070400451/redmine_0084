@@ -7,9 +7,13 @@ Box API: GET https://api.box.com/2.0/shared_items
 """
 
 import logging
+import re
 from typing import Any
 
 import requests
+
+_DIRECT_FOLDER_RE = re.compile(r"/folder/(\d+)")
+_DIRECT_FILE_RE = re.compile(r"/file/(\d+)")
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +30,25 @@ class SharedItemResolver:
     def resolve(self, shared_link: str) -> dict[str, Any]:
         """
         Returns:
-            {"type": "file"|"folder", "id": "<item_id>", "name": "..."}
+            {"type": "file"|"folder", "id": "<item_id>", "name": "...", "is_direct": bool}
 
         Raises:
             requests.HTTPError: API エラー
             ValueError: 予期しないレスポンス
         """
+        # 直接フォルダ/ファイル URL（/folder/ID, /file/ID）はAPIを呼ばずにIDを抽出
+        m = _DIRECT_FOLDER_RE.search(shared_link)
+        if m and "/s/" not in shared_link:
+            folder_id = m.group(1)
+            logger.info("Direct folder URL: id=%s", folder_id)
+            return {"type": "folder", "id": folder_id, "name": "", "is_direct": True}
+
+        m = _DIRECT_FILE_RE.search(shared_link)
+        if m and "/s/" not in shared_link:
+            file_id = m.group(1)
+            logger.info("Direct file URL: id=%s", file_id)
+            return {"type": "file", "id": file_id, "name": "", "is_direct": True}
+
         box_api_header = f"shared_link={shared_link}"
         if self._password:
             box_api_header += f"&shared_link_password={self._password}"
@@ -61,4 +78,4 @@ class SharedItemResolver:
         logger.info(
             "Resolved Box link: type=%s id=%s name=%s", item_type, item_id, item_name
         )
-        return {"type": item_type, "id": item_id, "name": item_name}
+        return {"type": item_type, "id": item_id, "name": item_name, "is_direct": False}

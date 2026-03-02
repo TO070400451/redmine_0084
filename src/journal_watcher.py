@@ -306,7 +306,9 @@ class JournalWatcher:
             box_item_type = item_info["type"]
             box_item_id = item_info["id"]
 
-            downloader = ZipDownloader(token, shared_link, self._cfg.box_shared_link_password)
+            # 直接URL（/folder/ID, /file/ID）では BoxApi ヘッダー不要
+            dl_shared_link = "" if item_info.get("is_direct") else shared_link
+            downloader = ZipDownloader(token, dl_shared_link, self._cfg.box_shared_link_password)
             zip_name = f"download{'.' + box_item_info_ext(box_item_type)}"
             zip_path = downloader.download(
                 item_type=box_item_type,
