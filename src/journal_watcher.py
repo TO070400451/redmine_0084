@@ -18,7 +18,7 @@ from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
 from .box.token_manager import TokenManager
 from .box.validator import validate as validate_box
-from .box.individual_downloader import download_bts_folder, download_from_ancestor
+from .box.individual_downloader import download_bts_folder, download_from_named_ancestor
 from .box.waiver_parser import extract_waiver_tests
 from . import dashboard, win_notifier
 from .pattern_matcher import PatternMatcher
@@ -303,9 +303,9 @@ class JournalWatcher:
                     # BTS: フォルダ直下のZIPをそのままDL
                     if len(resolved_items) >= 1:
                         download_bts_folder(resolved_items[0]["id"], tok, raw_dir)
-                    # GTS: 3階層上の 03_GTS フォルダを起点に再帰DL
+                    # GTS: 上下を探索して 03_GTS フォルダを起点に再帰DL
                     if len(resolved_items) >= 2:
-                        download_from_ancestor(resolved_items[1]["id"], tok, raw_dir, parent_levels=3)
+                        download_from_named_ancestor(resolved_items[1]["id"], tok, raw_dir, "03_GTS")
 
                 try:
                     _do_bts_gts(token)

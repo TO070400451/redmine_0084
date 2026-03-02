@@ -94,6 +94,44 @@ def navigate_to_ancestor(folder_id: str, token: str, levels: int) -> dict[str, A
     return info
 
 
+def locate_folder_by_name(
+    folder_id: str, token: str, name: str, max_levels_up: int = 8
+) -> dict[str, Any]:
+    """
+    folder_id を起点に上下方向を探索して name のフォルダを返す。
+    各レベルで「現在フォルダ自身」と「直下の子フォルダ」を確認しながら
+    上方向に max_levels_up 階層まで辿る。
+    見つからない場合は ValueError を送出する。
+    """
+    current = get_folder_info(folder_id, token)
+    for level in range(max_levels_up + 1):
+        # 現在フォルダ自身が target か確認
+        if current.get("name") == name:
+            logger.info("Found '%s' at level %d up (id=%s)", name, level, current.get("id"))
+            return current
+        # 現在フォルダの直下子フォルダを確認
+        for item in list_folder_items(current["id"], token):
+            if item["type"] == "folder" and item["name"] == name:
+                logger.info(
+                    "Found '%s' as direct child at level %d (id=%s)", name, level, item["id"]
+                )
+                return get_folder_info(item["id"], token)
+        # 上に移動
+        if level < max_levels_up:
+            parent = current.get("parent") or {}
+            if not parent.get("id") or parent["id"] == "0":
+                logger.warning("Reached root at level %d without finding '%s'", level, name)
+                break
+            current = get_folder_info(parent["id"], token)
+            logger.debug(
+                "Moved up to level %d: %s (id=%s)", level + 1, current.get("name"), current.get("id")
+            )
+    raise ValueError(
+        f"Folder '{name}' not found near folder {folder_id} "
+        f"(searched up to {max_levels_up} levels up, direct children checked at each level)"
+    )
+
+
 def download_bts_folder(folder_id: str, token: str, dest_dir: Path) -> None:
     """BTSフォルダ直下のファイル（ZIP等）をそのまま dest_dir にダウンロードする。"""
     items = list_folder_items(folder_id, token)
@@ -117,5 +155,19 @@ def download_from_ancestor(
     ancestor = navigate_to_ancestor(folder_id, token, parent_levels)
     top_name: str = ancestor["name"]
     top_id: str = ancestor["id"]
+    logger.info("GTS top folder: %s (id=%s)", top_name, top_id)
+    _download_recursive(top_id, token, dest_dir / top_name)
+
+
+def download_from_named_ancestor(
+    folder_id: str, token: str, dest_dir: Path, ancestor_name: str
+) -> None:
+    """
+    folder_id の周辺（上下）を探索して ancestor_name のフォルダを見つけ、
+    そこを起点にフォルダ構造を保ちながら dest_dir 以下にダウンロードする。
+    """
+    target = locate_folder_by_name(folder_id, token, ancestor_name)
+    top_name: str = target["name"]
+    top_id: str = target["id"]
     logger.info("GTS top folder: %s (id=%s)", top_name, top_id)
     _download_recursive(top_id, token, dest_dir / top_name)
