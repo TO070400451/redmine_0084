@@ -64,7 +64,8 @@ class RedmineClient:
     def get_issues_updated_since(
         self, project_id: str, since: str
     ) -> list[dict[str, Any]]:
-        """since（ISO8601）以降に更新された全 issue をページングで取得する。"""
+        """since（ISO8601）以降に更新された全 issue をページングで取得する。
+        project_id は使用しない（全プロジェクト対象）。"""
         # Redmine は YYYY-MM-DD 形式のみ受け付けるため日付部分のみ使用
         since_date = since[:10]
         issues: list[dict[str, Any]] = []
@@ -73,7 +74,6 @@ class RedmineClient:
             data = self._get(
                 "/issues.json",
                 params={
-                    "project_id": project_id,
                     "sort": "updated_on:asc",
                     "limit": 100,
                     "offset": offset,
@@ -87,7 +87,7 @@ class RedmineClient:
             if offset >= data.get("total_count", 0) or not page:
                 break
         logger.info(
-            "Fetched %d issues updated since %s", len(issues), since_date
+            "Fetched %d issues updated since %s (all projects)", len(issues), since_date
         )
         return issues
 
