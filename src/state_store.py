@@ -105,7 +105,7 @@ class StateStore:
             conn.commit()
         logger.debug("Inserted journal_id=%d", journal_id)
 
-    def get_dashboard_records(self, min_score: int = 60) -> list[sqlite3.Row]:
+    def get_dashboard_records(self, min_score: int = 80) -> list[sqlite3.Row]:
         """ダッシュボード表示用：min_score 以上のレコードを新しい順で返す。"""
         with self._conn() as conn:
             return conn.execute(
