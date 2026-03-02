@@ -185,19 +185,19 @@ def generate(store: StateStore, output_path: str) -> None:
                 dl_cell = '<span class="val-ok">✓ 完了</span>'
             elif validation_status == "validation_ok" and status == "downloading":
                 dl_cell = (
-                    '<button class="dl-btn" onclick="triggerDownload({journal_id}, this)">再試行</button>'
-                    '<div class="status">DL中断</div>'
-                ).format(journal_id=journal_id)
+                    f'<button class="dl-btn" onclick="triggerDownload({journal_id}, this)">再試行</button>'
+                    f'<div class="status" id="st-{journal_id}">DL中断</div>'
+                )
             elif status == "downloading":
                 dl_cell = (
-                    '<button class="dl-btn" onclick="triggerDownload({journal_id}, this)">再試行</button>'
-                    '<div class="status">DL中断</div>'
-                ).format(journal_id=journal_id)
+                    f'<button class="dl-btn" onclick="triggerDownload({journal_id}, this)">再試行</button>'
+                    f'<div class="status" id="st-{journal_id}">DL中断</div>'
+                )
             elif status == "failed":
                 last_error = _esc((r["last_error"] or "")[:80])
                 dl_cell = (
                     f'<button class="dl-btn" onclick="triggerDownload({journal_id}, this)">再試行</button>'
-                    f'<div class="val-defects">{last_error}</div>'
+                    f'<div class="status" id="st-{journal_id}">失敗: {last_error}</div>'
                 )
             else:
                 dl_cell = _DL_DONE.format(status_label=status_label)
