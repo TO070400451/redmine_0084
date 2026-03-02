@@ -64,11 +64,13 @@ def download_file(file_id: str, file_name: str, token: str, dest_path: Path) -> 
         allow_redirects=True,
     )
     resp.raise_for_status()
+    total_bytes = 0
     with open(dest_path, "wb") as f:
         for chunk in resp.iter_content(chunk_size=65536):
             if chunk:
                 f.write(chunk)
-    logger.info("Downloaded: %s (%d bytes)", dest_path.name, dest_path.stat().st_size)
+                total_bytes += len(chunk)
+    logger.info("Downloaded: %s (%d bytes)", dest_path.name, total_bytes)
 
 
 def _download_recursive(folder_id: str, token: str, dest_dir: Path) -> None:
