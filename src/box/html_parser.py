@@ -49,8 +49,11 @@ def parse(html: str) -> HtmlResult:
     events: list[tuple[int, str, str]] = []
     for m in _MODULE_RE.finditer(section):
         raw = re.sub(r"&nbsp;|&#[xX]?[0-9a-fA-F]+;", " ", m.group(1)).strip()
+        abi_m = _ABI_RE.match(raw)
         module_name = _ABI_RE.sub("", raw).strip()
-        events.append((m.start(), "module", module_name))
+        # ABI がある場合はキーに付記して区別する（例: "ModuleName (arm64-v8a)"）
+        key = f"{module_name} ({abi_m.group(1)})" if abi_m else module_name
+        events.append((m.start(), "module", key))
     for m in _TESTNAME_RE.finditer(section):
         events.append((m.start(), "test", m.group(1).strip()))
     events.sort()

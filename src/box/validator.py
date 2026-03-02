@@ -10,8 +10,12 @@ Box フォルダのバリデーション。
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from collections import defaultdict
+
+# モジュールキーから ABI ラベル（例: " (arm64-v8a)"）を除去するための正規表現
+_ABI_LABEL_RE = re.compile(r'\s*\((arm64-v8a|armeabi-v7a|x86_64|x86)\)$')
 
 from . import html_parser
 from .folder_walker import find_files, download_text, get_folder_name, resolve_folder_id
@@ -184,7 +188,8 @@ def _check_fail_resolution(parsed: list[dict], waiver_tests: set[str] = set()) -
                 if not tests:
                     continue
 
-                module_base = module_label.split("[")[0]  # "[instant]" 等を除去
+                # ABI ラベル（例: " (arm64-v8a)"）と "[instant]" 等を除去して再試行フォルダ名と照合
+                module_base = _ABI_LABEL_RE.sub("", module_label).split("[")[0]
 
                 if module_label in rerun_modules:
                     # パターン1: モジュール名完全一致
