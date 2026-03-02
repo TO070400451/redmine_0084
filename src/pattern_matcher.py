@@ -49,7 +49,7 @@ class PatternMatcher:
 
             for kw in keywords.get("should", []):
                 if kw in combined:
-                    score += 8
+                    score += 20
                     evidence.append(f"[should] {kw}")
 
             for kw in keywords.get("must_not", []):

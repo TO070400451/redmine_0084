@@ -22,9 +22,16 @@ CREATE TABLE IF NOT EXISTS journal_events (
     ticket_url      TEXT,
     box_links_json  TEXT,
     work_dir        TEXT,
-    last_error      TEXT
+    last_error      TEXT,
+    issue_subject   TEXT,
+    comment_excerpt TEXT
 )
 """
+
+_MIGRATE = [
+    "ALTER TABLE journal_events ADD COLUMN issue_subject TEXT",
+    "ALTER TABLE journal_events ADD COLUMN comment_excerpt TEXT",
+]
 
 
 class StateStore:
@@ -36,6 +43,12 @@ class StateStore:
         with self._conn() as conn:
             conn.execute(_CREATE_TABLE)
             conn.commit()
+            for stmt in _MIGRATE:
+                try:
+                    conn.execute(stmt)
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # 列が既に存在する場合はスキップ
         logger.info("StateStore initialized: %s", db_path)
 
     @contextmanager
@@ -63,14 +76,17 @@ class StateStore:
         matched_pattern: Optional[str],
         score: Optional[int],
         box_links: list[str],
+        issue_subject: Optional[str] = None,
+        comment_excerpt: Optional[str] = None,
     ) -> None:
         with self._conn() as conn:
             conn.execute(
                 """
                 INSERT INTO journal_events
                   (journal_id, issue_id, detected_at, ticket_url,
-                   matched_pattern, score, box_links_json, status, decision)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'detected', 'pending')
+                   matched_pattern, score, box_links_json, status, decision,
+                   issue_subject, comment_excerpt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'detected', 'pending', ?, ?)
                 """,
                 (
                     journal_id,
@@ -80,10 +96,23 @@ class StateStore:
                     matched_pattern,
                     score,
                     json.dumps(box_links, ensure_ascii=False),
+                    issue_subject,
+                    comment_excerpt,
                 ),
             )
             conn.commit()
         logger.debug("Inserted journal_id=%d", journal_id)
+
+    def get_dashboard_records(self) -> list[sqlite3.Row]:
+        """ダッシュボード表示用：スコアありのレコードを新しい順で返す。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM journal_events
+                WHERE score IS NOT NULL
+                ORDER BY detected_at DESC
+                """
+            ).fetchall()
 
     def mark_notified(self, journal_id: int, notified_at: str) -> None:
         with self._conn() as conn:

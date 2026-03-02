@@ -84,3 +84,13 @@ class Config:
     patterns_yaml: str = field(
         default_factory=lambda: os.getenv("PATTERNS_YAML", "config/patterns.yaml")
     )
+
+    # ダッシュボード HTML 出力先
+    dashboard_path: str = field(
+        default_factory=lambda: os.getenv("DASHBOARD_PATH", "dashboard.html")
+    )
+
+    # Web サーバーポート
+    web_port: int = field(
+        default_factory=lambda: int(os.getenv("WEB_PORT", "8080"))
+    )

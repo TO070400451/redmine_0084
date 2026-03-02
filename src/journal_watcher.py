@@ -15,11 +15,11 @@ from typing import Any, Optional
 from .box.link_extractor import extract_box_links
 from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
+from . import dashboard, win_notifier
 from .extractor import extract_zip, write_meta
 from .pattern_matcher import PatternMatcher
 from .redmine_client import RedmineClient
 from .state_store import StateStore
-from .teams.notifier import TeamsNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +33,11 @@ class JournalWatcher:
         store: StateStore,
         redmine: RedmineClient,
         matcher: PatternMatcher,
-        notifier: TeamsNotifier,
     ) -> None:
         self._cfg = cfg
         self._store = store
         self._redmine = redmine
         self._matcher = matcher
-        self._notifier = notifier
 
     # ------------------------------------------------------------------
     # Public: 1回の処理サイクル
@@ -50,6 +48,7 @@ class JournalWatcher:
         logger.info("--- Poll cycle start ---")
         self._detect_and_notify()
         self._process_work_decisions()
+        dashboard.generate(self._store, self._cfg.dashboard_path)
         logger.info("--- Poll cycle end ---")
 
     # ------------------------------------------------------------------
@@ -108,6 +107,7 @@ class JournalWatcher:
         )
 
         best = results[0] if results else None
+        comment_excerpt = notes[:200] if notes else details_text[:200]
 
         self._store.insert_detected(
             journal_id=journal_id,
@@ -117,6 +117,8 @@ class JournalWatcher:
             matched_pattern=best.pattern_id if best else None,
             score=best.score if best else None,
             box_links=box_links,
+            issue_subject=subject,
+            comment_excerpt=comment_excerpt,
         )
 
         if best is None:
@@ -126,24 +128,16 @@ class JournalWatcher:
             self._store.set_decision(journal_id, "skip")
             return
 
-        # Teams 通知
-        try:
-            self._notifier.send(
-                journal_id=journal_id,
-                issue_id=issue_id,
-                ticket_url=ticket_url,
-                pattern_name=best.name,
-                score=best.score,
-                evidence=best.evidence,
-                box_links=box_links,
-            )
-            notified_at = datetime.now(timezone.utc).isoformat()
-            self._store.mark_notified(journal_id, notified_at)
-        except Exception as exc:
-            logger.error(
-                "Failed to notify Teams for journal_id=%d: %s", journal_id, exc
-            )
-            self._store.set_status(journal_id, "failed", error=str(exc))
+        # Windows トースト通知
+        win_notifier.notify(
+            title=f"Redmine #{issue_id}",
+            body=subject or comment_excerpt or "(コメントなし)",
+        )
+        notified_at = datetime.now(timezone.utc).isoformat()
+        self._store.mark_notified(journal_id, notified_at)
+
+        # ダッシュボード更新
+        dashboard.generate(self._store, self._cfg.dashboard_path)
 
     # ------------------------------------------------------------------
     # Step 2: work 決定済みの Box 処理
@@ -235,22 +229,28 @@ class JournalWatcher:
             )
             return
 
-        # ZIP 解凍（ファイルの場合は ZIP でない可能性もある）
-        try:
-            extract_zip(zip_path, extract_dir)
+        # ZIP 解凍（ZIP 以外のファイルはそのまま保持）
+        if zip_path.suffix.lower() == ".zip":
+            try:
+                extract_zip(zip_path, extract_dir)
+                extract_status = "ok"
+            except zipfile.BadZipFile as exc:
+                logger.error(
+                    "Bad ZIP for journal_id=%d: %s", journal_id, exc
+                )
+                error_summary = f"BadZipFile: {exc}"
+                extract_status = "bad_zip"
+            except Exception as exc:
+                logger.error(
+                    "Extract failed for journal_id=%d: %s", journal_id, exc
+                )
+                error_summary = str(exc)
+                extract_status = "failed"
+        else:
+            logger.info(
+                "Non-ZIP file downloaded, skipping extraction: %s", zip_path.name
+            )
             extract_status = "ok"
-        except zipfile.BadZipFile as exc:
-            logger.error(
-                "Bad ZIP for journal_id=%d: %s", journal_id, exc
-            )
-            error_summary = f"BadZipFile: {exc}"
-            extract_status = "bad_zip"
-        except Exception as exc:
-            logger.error(
-                "Extract failed for journal_id=%d: %s", journal_id, exc
-            )
-            error_summary = str(exc)
-            extract_status = "failed"
 
         final_status = "extracted" if extract_status == "ok" else "failed"
         self._store.set_status(

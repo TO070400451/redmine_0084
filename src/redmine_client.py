@@ -15,6 +15,7 @@ class RedmineClient:
     def __init__(self, base_url: str, api_key: str) -> None:
         self.base_url = base_url.rstrip("/")
         self._session = requests.Session()
+        self._session.verify = False
         self._session.headers.update(
             {
                 "X-Redmine-API-Key": api_key,

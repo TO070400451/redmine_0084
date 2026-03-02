@@ -10,20 +10,15 @@ Usage:
 
 import argparse
 import logging
-import sys
-import threading
 import time
-
-import uvicorn
 
 from .config import Config
 from .journal_watcher import JournalWatcher
 from .pattern_matcher import PatternMatcher
 from .redmine_client import RedmineClient
 from .state_store import StateStore
-from .teams.bot_server import app as bot_app, set_state_store
-from .teams.notifier import TeamsNotifier
 from .utils import setup_logging
+from . import web_server
 
 logger = logging.getLogger(__name__)
 
@@ -32,38 +27,11 @@ def build_components(cfg: Config) -> JournalWatcher:
     store = StateStore(cfg.db_path)
     redmine = RedmineClient(cfg.redmine_base_url, cfg.redmine_api_key)
     matcher = PatternMatcher(cfg.patterns_yaml)
-    notifier = TeamsNotifier(cfg)
+    watcher = JournalWatcher(cfg=cfg, store=store, redmine=redmine, matcher=matcher)
 
-    # Bot サーバーに StateStore を注入
-    set_state_store(store)
+    web_server.init(cfg, store, watcher._handle_box_work)
 
-    return JournalWatcher(
-        cfg=cfg,
-        store=store,
-        redmine=redmine,
-        matcher=matcher,
-        notifier=notifier,
-    )
-
-
-def start_bot_server(cfg: Config) -> None:
-    """Bot サーバーを別スレッドで起動する（bot モード時のみ）。"""
-    if cfg.teams_mode != "bot":
-        return
-
-    def _run() -> None:
-        uvicorn.run(
-            bot_app,
-            host=cfg.bot_server_host,
-            port=cfg.bot_server_port,
-            log_level="warning",
-        )
-
-    thread = threading.Thread(target=_run, daemon=True, name="bot-server")
-    thread.start()
-    logger.info(
-        "Bot server started on %s:%d", cfg.bot_server_host, cfg.bot_server_port
-    )
+    return watcher
 
 
 def parse_args() -> argparse.Namespace:
@@ -104,8 +72,7 @@ def main() -> None:
         return
 
     # 常駐モード
-    start_bot_server(cfg)
-
+    web_server.start(cfg)
     try:
         while True:
             try:

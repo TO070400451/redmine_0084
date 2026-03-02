@@ -1,45 +1,13 @@
 patterns:
-  - pattern_id: "auth_request"
-    name: "Google認証取得依頼"
-    description: "認証取得・申請・アカウント関連の依頼"
+  - pattern_id: "google_auth_result"
+    name: "Google認証試験結果通知"
+    description: "5ワード中4つ以上ヒットした場合に通知"
     keywords:
-      must: ["認証", "申請"]
-      should: ["至急", "期限", "手順", "依頼"]
-      must_not: ["完了", "クローズ"]
-    regex_rules:
-      - regex: "(Google|OAuth|GMS)"
-        weight: 15
-    link_rules:
-      box_link_bonus: 10
+      should:
+        - "Google認証"
+        - "全件Pass"
+        - "大橋様"
+        - "[リザルト格納先]"
+        - "https://app.box.com/"
     threshold:
-      notify_min_score: 60
-
-  - pattern_id: "log_analysis"
-    name: "ログ解析依頼"
-    description: "ログ/解析/原因調査/再現手順"
-    keywords:
-      must: ["ログ", "解析"]
-      should: ["再現", "手順", "添付", "現象"]
-      must_not: ["対応不要"]
-    regex_rules:
-      - regex: "(stacktrace|exception|ANR|crash)"
-        weight: 15
-    link_rules:
-      box_link_bonus: 10
-    threshold:
-      notify_min_score: 55
-
-  - pattern_id: "file_request"
-    name: "ファイル提供依頼"
-    description: "ファイル・資料・データの提供依頼"
-    keywords:
-      must: ["添付", "送付"]
-      should: ["資料", "データ", "ファイル", "共有", "Box"]
-      must_not: ["確認済み", "完了"]
-    regex_rules:
-      - regex: "(box\\.com|boxcloud\\.com)"
-        weight: 20
-    link_rules:
-      box_link_bonus: 15
-    threshold:
-      notify_min_score: 50
+      notify_min_score: 80
