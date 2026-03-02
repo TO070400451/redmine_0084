@@ -131,7 +131,12 @@ def _check_fail_resolution(parsed: list[dict]) -> list[str]:
 
     パス構造:
       メイン実行: <category>/<timestamp>/results/.../test_result.html
-      再試行:    <category>/Modules/<ModuleName>/results/.../test_result.html
+      再試行:    <category>/Modules/<FolderName>/results/.../test_result.html
+
+    再試行フォルダ名の照合（優先順位）:
+      1. module_label と完全一致
+      2. module_label から "[instant]" 等のサフィックスを除いた名前と一致
+      3. 失敗テスト名のクラス部分（"#" 前）と一致
     """
     defects = []
 
@@ -149,7 +154,7 @@ def _check_fail_resolution(parsed: list[dict]) -> list[str]:
         })
 
     for category, items in by_category.items():
-        # 再試行の失敗テストをモジュールごとに収集
+        # 再試行の失敗テストをフォルダ名ごとに収集
         rerun_failures: dict[str, set[str]] = defaultdict(set)
         rerun_modules: set[str] = set()
         for item in items:
@@ -167,8 +172,11 @@ def _check_fail_resolution(parsed: list[dict]) -> list[str]:
             for module_label, tests in item["failed_tests"].items():
                 if not tests:
                     continue
+
+                module_base = module_label.split("[")[0]  # "[instant]" 等を除去
+
                 if module_label in rerun_modules:
-                    # 再試行あり → 再試行後も失敗しているテストが瑕疵
+                    # パターン1: モジュール名完全一致
                     still_fail = [t for t in tests if t in rerun_failures[module_label]]
                     if still_fail:
                         defects.append(
@@ -177,14 +185,45 @@ def _check_fail_resolution(parsed: list[dict]) -> list[str]:
                             + "\n".join(f"   - {t}" for t in still_fail[:5])
                             + (f"\n   ... 他 {len(still_fail)-5} 件" if len(still_fail) > 5 else "")
                         )
+
+                elif module_base in rerun_modules:
+                    # パターン2: [instant] 等サフィックスなしで一致
+                    still_fail = [t for t in tests if t in rerun_failures[module_base]]
+                    if still_fail:
+                        defects.append(
+                            f"③ [{category}] {module_label}: "
+                            f"再試行後も {len(still_fail)} 件失敗\n"
+                            + "\n".join(f"   - {t}" for t in still_fail[:5])
+                            + (f"\n   ... 他 {len(still_fail)-5} 件" if len(still_fail) > 5 else "")
+                        )
+
                 else:
-                    # 再試行なし → 全失敗が瑕疵
-                    defects.append(
-                        f"③ [{category}] {module_label}: "
-                        f"再試行なし・{len(tests)} 件失敗\n"
-                        + "\n".join(f"   - {t}" for t in tests[:5])
-                        + (f"\n   ... 他 {len(tests)-5} 件" if len(tests) > 5 else "")
-                    )
+                    # パターン3: テストごとにクラス名（"#" 前）で再試行フォルダを探す
+                    still_fail = []
+                    not_retried = []
+                    for test in tests:
+                        test_class = test.split("#")[0] if "#" in test else ""
+                        if test_class in rerun_modules:
+                            if test in rerun_failures[test_class]:
+                                still_fail.append(test)
+                            # else: 再試行で解消済み → 瑕疵なし
+                        else:
+                            not_retried.append(test)
+
+                    if still_fail:
+                        defects.append(
+                            f"③ [{category}] {module_label}: "
+                            f"再試行後も {len(still_fail)} 件失敗\n"
+                            + "\n".join(f"   - {t}" for t in still_fail[:5])
+                            + (f"\n   ... 他 {len(still_fail)-5} 件" if len(still_fail) > 5 else "")
+                        )
+                    if not_retried:
+                        defects.append(
+                            f"③ [{category}] {module_label}: "
+                            f"再試行なし・{len(not_retried)} 件失敗\n"
+                            + "\n".join(f"   - {t}" for t in not_retried[:5])
+                            + (f"\n   ... 他 {len(not_retried)-5} 件" if len(not_retried) > 5 else "")
+                        )
 
     return defects
 
