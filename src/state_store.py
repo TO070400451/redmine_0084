@@ -199,6 +199,18 @@ class StateStore:
                 "SELECT * FROM journal_events WHERE decision='work' AND status='decided'"
             ).fetchall()
 
+    def get_active_issue_ids(self) -> list[int]:
+        """dismissed/skip 以外の status を持つ issue_id 一覧を返す（重複なし）。"""
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT issue_id FROM journal_events
+                WHERE status NOT IN ('dismissed', 'decided')
+                  AND decision != 'skip'
+                """
+            ).fetchall()
+            return [r["issue_id"] for r in rows]
+
     def get_notified_pending(self) -> list[sqlite3.Row]:
         """Teams通知済み・未決定のレコードを返す。"""
         with self._conn() as conn:

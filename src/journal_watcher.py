@@ -97,8 +97,10 @@ class JournalWatcher:
             logger.error("Failed to fetch issues: %s", exc)
             return
 
+        fetched_ids: set[int] = set()
         for issue_summary in issues:
             issue_id: int = issue_summary["id"]
+            fetched_ids.add(issue_id)
             try:
                 issue = self._redmine.get_issue_with_journals(issue_id)
             except Exception as exc:
@@ -117,6 +119,23 @@ class JournalWatcher:
 
             for journal in journals:
                 self._process_journal(issue, journal)
+
+        # 追跡中チケットが上位件数から漏れていても dismiss チェックする
+        for issue_id in self._store.get_active_issue_ids():
+            if issue_id in fetched_ids:
+                continue
+            try:
+                issue = self._redmine.get_issue_with_journals(issue_id)
+            except Exception as exc:
+                logger.error("Failed to fetch tracked issue %d: %s", issue_id, exc)
+                continue
+            journals = issue.get("journals", [])
+            if self._should_dismiss(journals):
+                dismissed = self._store.dismiss_issue(issue_id)
+                if dismissed:
+                    logger.info(
+                        "Auto-dismissed tracked issue_id=%d (%d records)", issue_id, dismissed
+                    )
 
     def _should_dismiss(self, journals: list[dict[str, Any]]) -> bool:
         """大橋翼 による完了フレーズを含む journal があれば True を返す。"""
