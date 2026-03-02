@@ -32,20 +32,29 @@ class ValidationResult:
 # Public API
 # ---------------------------------------------------------------------------
 
-def validate(box_url: str, token: str) -> ValidationResult:
-    """Box URL（直接リンクまたは共有リンク）を検証する。"""
+def validate(
+    box_url: str,
+    token: str,
+    waiver_tests: set[str] | None = None,
+) -> ValidationResult:
+    """Box URL（直接リンクまたは共有リンク）を検証する。
+
+    Args:
+        waiver_tests: Redmine コメントから抽出した Waiver テスト名の集合。
+                      これに含まれるテストは FAIL していても瑕疵と見なさない。
+    """
     try:
         folder_id = resolve_folder_id(box_url, token)
     except Exception as e:
         return ValidationResult(ok=False, defects=[f"Box URL の解決に失敗: {e}"])
-    return _validate_folder(folder_id, token)
+    return _validate_folder(folder_id, token, waiver_tests=waiver_tests or set())
 
 
 # ---------------------------------------------------------------------------
 # Internal
 # ---------------------------------------------------------------------------
 
-def _validate_folder(folder_id: str, token: str) -> ValidationResult:
+def _validate_folder(folder_id: str, token: str, waiver_tests: set[str] = set()) -> ValidationResult:
     defects: list[str] = []
 
     # 1. トップフォルダ名チェック
@@ -92,7 +101,7 @@ def _validate_folder(folder_id: str, token: str) -> ValidationResult:
     defects.extend(_check_fingerprint(parsed))
 
     # 5. チェック ③ FAIL の解消確認（カテゴリ内で判断）
-    defects.extend(_check_fail_resolution(parsed))
+    defects.extend(_check_fail_resolution(parsed, waiver_tests))
 
     return ValidationResult(ok=len(defects) == 0, defects=defects)
 
@@ -125,7 +134,7 @@ def _check_fingerprint(parsed: list[dict]) -> list[str]:
     return defects
 
 
-def _check_fail_resolution(parsed: list[dict]) -> list[str]:
+def _check_fail_resolution(parsed: list[dict], waiver_tests: set[str] = set()) -> list[str]:
     """
     カテゴリ（トップレベルフォルダ）ごとに FAIL の解消を確認する。
 
@@ -169,7 +178,9 @@ def _check_fail_resolution(parsed: list[dict]) -> list[str]:
         for item in items:
             if item["is_rerun"]:
                 continue
-            for module_label, tests in item["failed_tests"].items():
+            for module_label, original_tests in item["failed_tests"].items():
+                # Waiver 除外
+                tests = [t for t in original_tests if t not in waiver_tests]
                 if not tests:
                     continue
 

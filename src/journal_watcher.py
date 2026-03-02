@@ -18,6 +18,7 @@ from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
 from .box.token_manager import TokenManager
 from .box.validator import validate as validate_box
+from .box.waiver_parser import extract_waiver_tests
 from . import dashboard, win_notifier
 from .extractor import write_meta
 from .pattern_matcher import PatternMatcher
@@ -183,12 +184,27 @@ class JournalWatcher:
 
         logger.info("Processing Box work: journal_id=%d", journal_id)
 
+        # --- Waiver リスト取得 ---
+        waiver_tests: set[str] = set()
+        try:
+            issue = self._redmine.get_issue_with_journals(issue_id)
+            all_notes = "\n".join(
+                j.get("notes", "") for j in issue.get("journals", [])
+            )
+            waiver_tests = extract_waiver_tests(all_notes)
+            if waiver_tests:
+                logger.info(
+                    "Waivers found for issue %d: %d tests", issue_id, len(waiver_tests)
+                )
+        except Exception as exc:
+            logger.warning("Failed to fetch waivers for issue %d: %s", issue_id, exc)
+
         # --- バリデーション ---
         shared_link = box_links[0] if box_links else ""
         if shared_link:
             self._store.set_status(journal_id, "validating")
             try:
-                val = validate_box(shared_link, self._box_token())
+                val = validate_box(shared_link, self._box_token(), waiver_tests=waiver_tests)
             except Exception as e:
                 logger.error("Validation error journal_id=%d: %s", journal_id, e)
                 val_ok = False
