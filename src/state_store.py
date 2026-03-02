@@ -114,15 +114,21 @@ class StateStore:
         logger.debug("Inserted journal_id=%d", journal_id)
 
     def get_dashboard_records(self, min_score: int = 80) -> list[sqlite3.Row]:
-        """ダッシュボード表示用：min_score 以上かつ dismissed でないレコードを返す。"""
+        """ダッシュボード表示用：チケットごとに最新1件、min_score 以上かつ dismissed でないレコードを返す。"""
         with self._conn() as conn:
             return conn.execute(
                 """
                 SELECT * FROM journal_events
                 WHERE score >= ? AND status != 'dismissed'
+                  AND journal_id IN (
+                    SELECT journal_id FROM journal_events
+                    WHERE score >= ? AND status != 'dismissed'
+                    GROUP BY issue_id
+                    HAVING journal_id = MAX(journal_id)
+                  )
                 ORDER BY detected_at DESC
                 """,
-                (min_score,),
+                (min_score, min_score),
             ).fetchall()
 
     def dismiss(self, journal_id: int) -> None:
