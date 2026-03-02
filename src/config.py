@@ -65,6 +65,15 @@ class Config:
     box_access_token: str = field(
         default_factory=lambda: os.getenv("BOX_ACCESS_TOKEN", "")
     )
+    box_refresh_token: str = field(
+        default_factory=lambda: os.getenv("BOX_REFRESH_TOKEN", "")
+    )
+    box_client_id: str = field(
+        default_factory=lambda: os.getenv("BOX_CLIENT_ID", "")
+    )
+    box_client_secret: str = field(
+        default_factory=lambda: os.getenv("BOX_CLIENT_SECRET", "")
+    )
     box_shared_link_password: str = field(
         default_factory=lambda: os.getenv("BOX_SHARED_LINK_PASSWORD", "")
     )

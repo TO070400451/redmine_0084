@@ -12,9 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import requests
+
 from .box.link_extractor import extract_box_links
 from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
+from .box.token_manager import TokenManager
 from . import dashboard, win_notifier
 from .extractor import extract_zip, write_meta
 from .pattern_matcher import PatternMatcher
@@ -38,6 +41,28 @@ class JournalWatcher:
         self._store = store
         self._redmine = redmine
         self._matcher = matcher
+        self._token_mgr: Optional[TokenManager] = (
+            TokenManager(
+                client_id=cfg.box_client_id,
+                client_secret=cfg.box_client_secret,
+                access_token=cfg.box_access_token,
+                refresh_token=cfg.box_refresh_token,
+            )
+            if cfg.box_client_id and cfg.box_refresh_token
+            else None
+        )
+
+    def _box_token(self) -> str:
+        """有効な Box アクセストークンを返す。TokenManager がなければ設定値をそのまま使う。"""
+        if self._token_mgr:
+            return self._token_mgr.access_token
+        return self._cfg.box_access_token
+
+    def _box_token_refresh(self) -> str:
+        """トークンをリフレッシュして返す。TokenManager がない場合はそのまま返す。"""
+        if self._token_mgr:
+            return self._token_mgr.refresh()
+        return self._cfg.box_access_token
 
     # ------------------------------------------------------------------
     # Public: 1回の処理サイクル
@@ -194,18 +219,24 @@ class JournalWatcher:
             return
 
         shared_link = box_links[0]
-        resolver = SharedItemResolver(
-            self._cfg.box_access_token, self._cfg.box_shared_link_password
-        )
-        downloader = ZipDownloader(
-            self._cfg.box_access_token, shared_link, self._cfg.box_shared_link_password
-        )
 
         try:
-            item_info = resolver.resolve(shared_link)
+            token = self._box_token()
+            try:
+                resolver = SharedItemResolver(token, self._cfg.box_shared_link_password)
+                item_info = resolver.resolve(shared_link)
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 401:
+                    token = self._box_token_refresh()
+                    resolver = SharedItemResolver(token, self._cfg.box_shared_link_password)
+                    item_info = resolver.resolve(shared_link)
+                else:
+                    raise
+
             box_item_type = item_info["type"]
             box_item_id = item_info["id"]
 
+            downloader = ZipDownloader(token, shared_link, self._cfg.box_shared_link_password)
             zip_name = f"download{'.' + box_item_info_ext(box_item_type)}"
             zip_path = downloader.download(
                 item_type=box_item_type,
