@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS journal_events (
 )
 """
 
+_CREATE_SETTINGS = """
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+)
+"""
+
 _MIGRATE = [
     "ALTER TABLE journal_events ADD COLUMN issue_subject TEXT",
     "ALTER TABLE journal_events ADD COLUMN comment_excerpt TEXT",
@@ -44,6 +51,7 @@ class StateStore:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as conn:
             conn.execute(_CREATE_TABLE)
+            conn.execute(_CREATE_SETTINGS)
             conn.commit()
             for stmt in _MIGRATE:
                 try:
@@ -198,6 +206,18 @@ class StateStore:
             return conn.execute(
                 "SELECT * FROM journal_events WHERE decision='work' AND status='decided'"
             ).fetchall()
+
+    def get_setting(self, key: str) -> Optional[str]:
+        with self._conn() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
+            )
+            conn.commit()
 
     def get_active_issue_ids(self) -> list[int]:
         """dismissed/skip 以外の status を持つ issue_id 一覧を返す（重複なし）。"""

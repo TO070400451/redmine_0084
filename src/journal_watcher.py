@@ -88,10 +88,19 @@ class JournalWatcher:
     # ------------------------------------------------------------------
 
     def _detect_and_notify(self) -> None:
+        # 前回ポーリング時刻を取得（なければ24時間前を初期値とする）
+        last_polled = self._store.get_setting("last_polled_at")
+        if not last_polled:
+            last_polled = (
+                datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            ).isoformat()
+            logger.info("No last_polled_at found, defaulting to start of today: %s", last_polled)
+
+        now_str = datetime.now(timezone.utc).isoformat()
+
         try:
-            issues = self._redmine.get_updated_issues(
-                self._cfg.redmine_project_id,
-                limit=self._cfg.issue_fetch_limit,
+            issues = self._redmine.get_issues_updated_since(
+                self._cfg.redmine_project_id, since=last_polled
             )
         except Exception as exc:
             logger.error("Failed to fetch issues: %s", exc)
@@ -120,7 +129,7 @@ class JournalWatcher:
             for journal in journals:
                 self._process_journal(issue, journal)
 
-        # 追跡中チケットが上位件数から漏れていても dismiss チェックする
+        # 追跡中チケットが取得範囲外でも dismiss チェックする
         for issue_id in self._store.get_active_issue_ids():
             if issue_id in fetched_ids:
                 continue
@@ -136,6 +145,9 @@ class JournalWatcher:
                     logger.info(
                         "Auto-dismissed tracked issue_id=%d (%d records)", issue_id, dismissed
                     )
+
+        # ポーリング時刻を更新
+        self._store.set_setting("last_polled_at", now_str)
 
     def _should_dismiss(self, journals: list[dict[str, Any]]) -> bool:
         """大橋翼 による完了フレーズを含む journal があれば True を返す。"""

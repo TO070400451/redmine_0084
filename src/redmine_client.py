@@ -61,6 +61,34 @@ class RedmineClient:
         )
         return data.get("issues", [])
 
+    def get_issues_updated_since(
+        self, project_id: str, since: str
+    ) -> list[dict[str, Any]]:
+        """since（ISO8601）以降に更新された全 issue をページングで取得する。"""
+        issues: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            data = self._get(
+                "/issues.json",
+                params={
+                    "project_id": project_id,
+                    "sort": "updated_on:asc",
+                    "limit": 100,
+                    "offset": offset,
+                    "status_id": "*",
+                    "updated_on": f">={since}",
+                },
+            )
+            page = data.get("issues", [])
+            issues.extend(page)
+            offset += len(page)
+            if offset >= data.get("total_count", 0) or not page:
+                break
+        logger.info(
+            "Fetched %d issues updated since %s", len(issues), since
+        )
+        return issues
+
     def get_issue_with_journals(self, issue_id: int) -> dict[str, Any]:
         """journals を含む issue 詳細を取得する。"""
         data = self._get(
