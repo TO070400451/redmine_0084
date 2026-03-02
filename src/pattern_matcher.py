@@ -87,3 +87,10 @@ class PatternMatcher:
 
         results.sort(key=lambda r: r.score, reverse=True)
         return results
+
+    def requires_box_validation(self, pattern_id: str) -> bool:
+        """パターンに validate_box: false が設定されていなければ True を返す。"""
+        for pat in self.patterns:
+            if pat.get("pattern_id") == pattern_id:
+                return pat.get("validate_box", True)
+        return True

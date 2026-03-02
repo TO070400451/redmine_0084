@@ -225,9 +225,10 @@ class JournalWatcher:
         except Exception as exc:
             logger.warning("Failed to fetch waivers for issue %d: %s", issue_id, exc)
 
-        # --- バリデーション ---
+        # --- バリデーション（パターンが要求する場合のみ）---
         shared_link = box_links[0] if box_links else ""
-        if shared_link:
+        should_validate = self._matcher.requires_box_validation(matched_pattern or "")
+        if should_validate and shared_link:
             self._store.set_status(journal_id, "validating")
             try:
                 val = validate_box(shared_link, self._box_token(), waiver_tests=waiver_tests)
@@ -248,6 +249,8 @@ class JournalWatcher:
                     error="瑕疵あり: " + " / ".join(d.split("\n")[0] for d in defects),
                 )
                 return
+        elif not should_validate:
+            logger.info("Box validation skipped for pattern=%s journal_id=%d", matched_pattern, journal_id)
 
         self._store.set_status(journal_id, "downloading")
 
