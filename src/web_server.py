@@ -73,6 +73,17 @@ def trigger_download(journal_id: int):
     return {"status": "started", "journal_id": journal_id}
 
 
+@app.post("/dismiss/{journal_id}")
+def dismiss_record(journal_id: int):
+    if _store is None:
+        raise HTTPException(status_code=503, detail="Not initialized")
+    row = _store.get(journal_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Journal not found")
+    _store.dismiss(journal_id)
+    return {"status": "dismissed", "journal_id": journal_id}
+
+
 @app.get("/status/{journal_id}")
 def get_status(journal_id: int):
     if _store is None:

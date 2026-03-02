@@ -27,6 +27,12 @@ from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
 
+_DISMISS_USER = "大橋翼"
+_DISMISS_PHRASES = [
+    "BTS/GtsEdiHostTestCases を Google社サーバーにアップロード致しました",
+    "以下に承認通知を置きました",
+]
+
 
 class JournalWatcher:
     """メインのポーリング・処理ループ。"""
@@ -100,8 +106,28 @@ class JournalWatcher:
                 continue
 
             journals: list[dict[str, Any]] = issue.get("journals", [])
+
+            # 完了コメント確認 → 自動 dismiss
+            if self._should_dismiss(journals):
+                dismissed = self._store.dismiss_issue(issue_id)
+                if dismissed:
+                    logger.info(
+                        "Auto-dismissed issue_id=%d (%d records)", issue_id, dismissed
+                    )
+
             for journal in journals:
                 self._process_journal(issue, journal)
+
+    def _should_dismiss(self, journals: list[dict[str, Any]]) -> bool:
+        """大橋翼 による完了フレーズを含む journal があれば True を返す。"""
+        for journal in journals:
+            user_name = journal.get("user", {}).get("name", "")
+            if _DISMISS_USER not in user_name:
+                continue
+            notes = journal.get("notes", "") or ""
+            if any(phrase in notes for phrase in _DISMISS_PHRASES):
+                return True
+        return False
 
     def _process_journal(
         self, issue: dict[str, Any], journal: dict[str, Any]

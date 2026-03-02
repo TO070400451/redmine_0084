@@ -34,6 +34,8 @@ _HTML_TEMPLATE = """\
     .dl-btn {{ padding: 4px 12px; background: #4a6fa5; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; }}
     .dl-btn:hover {{ background: #3a5f95; }}
     .dl-btn:disabled {{ background: #aaa; cursor: default; }}
+    .del-btn {{ padding: 4px 8px; background: #e0e0e0; color: #666; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; }}
+    .del-btn:hover {{ background: #c00; color: #fff; }}
     .status {{ font-size: 0.8em; color: #888; margin-top: 4px; }}
     .val-ok {{ color: #2a7a2a; font-size: 0.85em; }}
     .val-ng {{ color: #c00; font-size: 0.85em; }}
@@ -56,6 +58,7 @@ _ROW_TEMPLATE = """\
       <td>{detected_at}</td>
       <td class="excerpt">{comment_excerpt}</td>
       <td>{dl_cell}</td>
+      <td><button class="del-btn" onclick="dismissRecord({journal_id}, this)">削除</button></td>
     </tr>
 """
 
@@ -93,6 +96,23 @@ async function triggerDownload(journalId, btn) {
   } catch(e) {
     if (st) st.textContent = 'エラー';
     btn.disabled = false;
+  }
+}
+async function dismissRecord(journalId, btn) {
+  if (!window.confirm('このレコードをダッシュボードから削除しますか？')) return;
+  btn.disabled = true;
+  try {
+    const resp = await fetch('/dismiss/' + journalId, {method: 'POST'});
+    if (resp.ok) {
+      const row = btn.closest('tr');
+      if (row) row.remove();
+    } else {
+      btn.disabled = false;
+      alert('削除に失敗しました');
+    }
+  } catch(e) {
+    btn.disabled = false;
+    alert('削除に失敗しました');
   }
 }
 function pollStatus(journalId, st, btn) {
@@ -182,7 +202,7 @@ def generate(store: StateStore, output_path: str) -> None:
             ))
         content = (
             "<table>"
-            "<tr><th>#</th><th>タイトル</th><th>検出日時</th><th>コメント（抜粋）</th><th>Box</th></tr>"
+            "<tr><th>#</th><th>タイトル</th><th>検出日時</th><th>コメント（抜粋）</th><th>Box</th><th></th></tr>"
             + "".join(rows)
             + "</table>"
             + _DL_SCRIPT

@@ -106,16 +106,36 @@ class StateStore:
         logger.debug("Inserted journal_id=%d", journal_id)
 
     def get_dashboard_records(self, min_score: int = 80) -> list[sqlite3.Row]:
-        """ダッシュボード表示用：min_score 以上のレコードを新しい順で返す。"""
+        """ダッシュボード表示用：min_score 以上かつ dismissed でないレコードを返す。"""
         with self._conn() as conn:
             return conn.execute(
                 """
                 SELECT * FROM journal_events
-                WHERE score >= ?
+                WHERE score >= ? AND status != 'dismissed'
                 ORDER BY detected_at DESC
                 """,
                 (min_score,),
             ).fetchall()
+
+    def dismiss(self, journal_id: int) -> None:
+        """単一レコードを dismissed にする（手動削除）。"""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE journal_events SET status='dismissed' WHERE journal_id=?",
+                (journal_id,),
+            )
+            conn.commit()
+        logger.info("Dismissed journal_id=%d", journal_id)
+
+    def dismiss_issue(self, issue_id: int) -> int:
+        """issue_id に紐づく全非 dismissed レコードを dismissed にする。変更件数を返す。"""
+        with self._conn() as conn:
+            cur = conn.execute(
+                "UPDATE journal_events SET status='dismissed' WHERE issue_id=? AND status != 'dismissed'",
+                (issue_id,),
+            )
+            conn.commit()
+            return cur.rowcount
 
     def mark_notified(self, journal_id: int, notified_at: str) -> None:
         with self._conn() as conn:
