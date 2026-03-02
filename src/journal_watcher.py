@@ -299,12 +299,23 @@ class JournalWatcher:
             download_mode = self._matcher.get_download_mode(matched_pattern or "")
 
             if download_mode == "bts_gts":
-                # BTS: フォルダ直下のZIPをそのままDL
-                if len(resolved_items) >= 1:
-                    download_bts_folder(resolved_items[0]["id"], token, raw_dir)
-                # GTS: 2階層上の 03_GTS フォルダを起点に再帰DL
-                if len(resolved_items) >= 2:
-                    download_from_ancestor(resolved_items[1]["id"], token, raw_dir, parent_levels=2)
+                def _do_bts_gts(tok: str) -> None:
+                    # BTS: フォルダ直下のZIPをそのままDL
+                    if len(resolved_items) >= 1:
+                        download_bts_folder(resolved_items[0]["id"], tok, raw_dir)
+                    # GTS: 3階層上の 03_GTS フォルダを起点に再帰DL
+                    if len(resolved_items) >= 2:
+                        download_from_ancestor(resolved_items[1]["id"], tok, raw_dir, parent_levels=3)
+
+                try:
+                    _do_bts_gts(token)
+                except requests.HTTPError as http_err:
+                    if http_err.response is not None and http_err.response.status_code == 401:
+                        logger.info("Box token expired during BTS/GTS download, refreshing...")
+                        token = self._box_token_refresh()
+                        _do_bts_gts(token)
+                    else:
+                        raise
             else:
                 # 全アイテムを1つの ZIP にまとめてダウンロード（ファイル名=チケット番号）
                 downloader = ZipDownloader(token, "", self._cfg.box_shared_link_password)
@@ -323,8 +334,8 @@ class JournalWatcher:
             journal_id, "extracted", work_dir=str(work_dir)
         )
         logger.info(
-            "Box work done: journal_id=%d zip=%s/%d.zip",
-            journal_id, self._cfg.work_root, issue_id,
+            "Box work done: journal_id=%d dest=%s",
+            journal_id, self._cfg.work_root,
         )
 
 
