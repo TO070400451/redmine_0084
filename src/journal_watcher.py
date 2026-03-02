@@ -303,9 +303,9 @@ class JournalWatcher:
                     # BTS: フォルダ直下のZIPをそのままDL
                     if len(resolved_items) >= 1:
                         download_bts_folder(resolved_items[0]["id"], tok, raw_dir)
-                    # GTS: 上下を探索して 03_GTS フォルダを起点に再帰DL
+                    # GTS: 上下を探索して 03_GTS フォルダを起点に Modules のみ再帰DL
                     if len(resolved_items) >= 2:
-                        download_from_named_ancestor(resolved_items[1]["id"], tok, raw_dir, "03_GTS")
+                        download_from_named_ancestor(resolved_items[1]["id"], tok, raw_dir, "03_GTS", include_subfolder="Module")
 
                 try:
                     _do_bts_gts(token)

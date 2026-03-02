@@ -162,14 +162,36 @@ def download_from_ancestor(
 
 
 def download_from_named_ancestor(
-    folder_id: str, token: str, dest_dir: Path, ancestor_name: str
+    folder_id: str,
+    token: str,
+    dest_dir: Path,
+    ancestor_name: str,
+    include_subfolder: str | None = None,
 ) -> None:
     """
     folder_id の周辺（上下）を探索して ancestor_name のフォルダを見つけ、
     そこを起点にフォルダ構造を保ちながら dest_dir 以下にダウンロードする。
+
+    include_subfolder が指定された場合、ancestor_name 直下のうち
+    その文字列を名前に含むサブフォルダのみを対象にする。
     """
     target = locate_folder_by_name(folder_id, token, ancestor_name)
     top_name: str = target["name"]
     top_id: str = target["id"]
+    top_dest = dest_dir / top_name
     logger.info("GTS top folder: %s (id=%s)", top_name, top_id)
-    _download_recursive(top_id, token, dest_dir / top_name)
+
+    if include_subfolder is None:
+        _download_recursive(top_id, token, top_dest)
+        return
+
+    # フィルタあり: 直下のサブフォルダを名前で絞り込む
+    for item in list_folder_items(top_id, token):
+        if item["type"] == "folder":
+            if include_subfolder in item["name"]:
+                logger.info("GTS: downloading subfolder '%s'", item["name"])
+                _download_recursive(item["id"], token, top_dest / item["name"])
+            else:
+                logger.info("GTS: skipping subfolder '%s'", item["name"])
+        elif item["type"] == "file":
+            download_file(item["id"], item["name"], token, top_dest / item["name"])
