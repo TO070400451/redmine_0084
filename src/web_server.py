@@ -49,7 +49,17 @@ def trigger_download(journal_id: int):
     if row is None:
         raise HTTPException(status_code=404, detail="Journal not found")
     if not row["box_links_json"] or row["box_links_json"] == "[]":
-        raise JSONResponse(status_code=400, content={"error": "No Box links"})
+        raise HTTPException(status_code=400, detail="No Box links")
+
+    # すでに処理中・完了のものは多重実行しない
+    current_status = row["status"] or ""
+    if current_status in ("validating", "downloading", "extracted"):
+        return {"status": current_status, "journal_id": journal_id}
+
+    # decision を work にセット（状態管理）
+    _store.set_decision(journal_id, "work")
+    # 最新行を取得して渡す
+    row = _store.get(journal_id)
 
     # バックグラウンドで実行
     thread = threading.Thread(
@@ -70,7 +80,13 @@ def get_status(journal_id: int):
     row = _store.get(journal_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Not found")
-    return {"journal_id": journal_id, "status": row["status"]}
+    keys = row.keys()
+    return {
+        "journal_id": journal_id,
+        "status": row["status"],
+        "validation_status": row["validation_status"] if "validation_status" in keys else None,
+        "last_error": (row["last_error"] or "")[:120] if "last_error" in keys else None,
+    }
 
 
 def start(cfg: Config) -> None:

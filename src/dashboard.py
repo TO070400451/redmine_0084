@@ -84,7 +84,7 @@ async function triggerDownload(journalId, btn) {
     const resp = await fetch('/download/' + journalId, {method: 'POST'});
     const data = await resp.json();
     if (resp.ok) {
-      if (st) st.textContent = 'DL中...';
+      if (st) st.textContent = '検証中...';
       pollStatus(journalId, st, btn);
     } else {
       if (st) st.textContent = 'エラー';
@@ -101,16 +101,22 @@ function pollStatus(journalId, st, btn) {
       const resp = await fetch('/status/' + journalId);
       const data = await resp.json();
       const s = data.status;
+      const vs = data.validation_status;
       if (s === 'extracted') {
         clearInterval(iv);
         if (st) st.textContent = '完了';
-        btn.textContent = '完了';
+        btn.textContent = '✓ 完了';
+        btn.disabled = true;
       } else if (s === 'failed') {
         clearInterval(iv);
-        if (st) st.textContent = '失敗';
-        btn.disabled = false;
-      } else {
+        // ページリロードで瑕疵詳細をサーバー描画で表示
+        window.location.reload();
+      } else if (s === 'validating') {
+        if (st) st.textContent = '検証中...';
+      } else if (s === 'downloading') {
         if (st) st.textContent = 'DL中...';
+      } else {
+        if (st) st.textContent = s;
       }
     } catch(e) { clearInterval(iv); }
   }, 3000);
