@@ -4,7 +4,7 @@ import re
 
 # Box 共有リンクのパターン（共有リンク・フォルダ・ファイル）
 _BOX_URL_RE = re.compile(
-    r"https?://(?:[\w-]+\.)?box\.com/s/[A-Za-z0-9_-]+",
+    r"https?://(?:[\w-]+\.)?box\.com/(?:s/[A-Za-z0-9_-]+|folder/\d+)",
     re.IGNORECASE,
 )
 

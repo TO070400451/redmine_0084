@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS journal_events (
 _MIGRATE = [
     "ALTER TABLE journal_events ADD COLUMN issue_subject TEXT",
     "ALTER TABLE journal_events ADD COLUMN comment_excerpt TEXT",
+    "ALTER TABLE journal_events ADD COLUMN validation_status TEXT",
+    "ALTER TABLE journal_events ADD COLUMN validation_defects_json TEXT",
 ]
 
 
@@ -149,6 +151,25 @@ class StateStore:
                 (status, error, work_dir, journal_id),
             )
             conn.commit()
+
+    def set_validation_result(
+        self,
+        journal_id: int,
+        ok: bool,
+        defects: list[str],
+    ) -> None:
+        status = "validation_ok" if ok else "validation_ng"
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE journal_events
+                SET validation_status=?, validation_defects_json=?
+                WHERE journal_id=?
+                """,
+                (status, json.dumps(defects, ensure_ascii=False), journal_id),
+            )
+            conn.commit()
+        logger.info("Validation result: journal_id=%d ok=%s defects=%d", journal_id, ok, len(defects))
 
     def get_decided_work(self) -> list[sqlite3.Row]:
         """decision='work' かつ status='decided' のレコードを返す。"""

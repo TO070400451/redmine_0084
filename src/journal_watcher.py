@@ -17,6 +17,7 @@ from .box.link_extractor import extract_box_links
 from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
 from .box.token_manager import TokenManager
+from .box.validator import validate as validate_box
 from . import dashboard, win_notifier
 from .extractor import write_meta
 from .pattern_matcher import PatternMatcher
@@ -181,6 +182,31 @@ class JournalWatcher:
         box_links: list[str] = json.loads(row["box_links_json"] or "[]")
 
         logger.info("Processing Box work: journal_id=%d", journal_id)
+
+        # --- バリデーション ---
+        shared_link = box_links[0] if box_links else ""
+        if shared_link:
+            self._store.set_status(journal_id, "validating")
+            try:
+                val = validate_box(shared_link, self._box_token())
+            except Exception as e:
+                logger.error("Validation error journal_id=%d: %s", journal_id, e)
+                val_ok = False
+                defects = [f"バリデーション実行エラー: {e}"]
+            else:
+                val_ok = val.ok
+                defects = val.defects
+            self._store.set_validation_result(journal_id, val_ok, defects)
+            if not val_ok:
+                logger.warning(
+                    "Validation failed journal_id=%d: %d defects", journal_id, len(defects)
+                )
+                self._store.set_status(
+                    journal_id, "failed",
+                    error="瑕疵あり: " + " / ".join(d.split("\n")[0] for d in defects),
+                )
+                return
+
         self._store.set_status(journal_id, "downloading")
 
         # 作業ディレクトリ作成

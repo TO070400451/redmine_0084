@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Redmine 監視ダッシュボード HTML を生成する。"""
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,10 @@ _HTML_TEMPLATE = """\
     .dl-btn:hover {{ background: #3a5f95; }}
     .dl-btn:disabled {{ background: #aaa; cursor: default; }}
     .status {{ font-size: 0.8em; color: #888; margin-top: 4px; }}
+    .val-ok {{ color: #2a7a2a; font-size: 0.85em; }}
+    .val-ng {{ color: #c00; font-size: 0.85em; }}
+    .val-defects {{ margin-top: 4px; font-size: 0.78em; color: #c00; white-space: pre-wrap; word-break: break-all; max-width: 320px; }}
+    .val-spin {{ color: #888; font-size: 0.85em; }}
   </style>
 </head>
 <body>
@@ -62,6 +67,7 @@ _STATUS_LABELS = {
     "notified": "",
     "detected": "",
     "decided": "処理待ち",
+    "validating": "検証中...",
     "downloading": "DL中...",
     "extracted": "完了",
     "failed": "失敗",
@@ -133,12 +139,31 @@ def generate(store: StateStore, output_path: str) -> None:
             has_box = bool(r["box_links_json"] and r["box_links_json"] != "[]")
 
             status_label = _STATUS_LABELS.get(status, status)
-            if has_box and status in ("notified", "detected"):
-                dl_cell = _DL_BTN.format(journal_id=journal_id, status_label="")
-            elif has_box:
-                dl_cell = _DL_DONE.format(status_label=status_label)
-            else:
+            validation_status = r["validation_status"] if "validation_status" in r.keys() else None
+            validation_defects_json = r["validation_defects_json"] if "validation_defects_json" in r.keys() else None
+
+            if not has_box:
                 dl_cell = '<span style="color:#ccc;font-size:0.85em;">—</span>'
+            elif status in ("notified", "detected"):
+                dl_cell = _DL_BTN.format(journal_id=journal_id, status_label="")
+            elif status == "validating":
+                dl_cell = '<span class="val-spin">検証中...</span>'
+            elif validation_status == "validation_ng":
+                defects = json.loads(validation_defects_json or "[]")
+                defect_lines = "\n".join(f"・{_esc(d.split(chr(10))[0])}" for d in defects)
+                dl_cell = (
+                    '<span class="val-ng">❌ 瑕疵あり</span>'
+                    + (f'<div class="val-defects">{defect_lines}</div>' if defect_lines else "")
+                )
+            elif validation_status == "validation_ok" and status == "extracted":
+                dl_cell = '<span class="val-ok">✓ 完了</span>'
+            elif validation_status == "validation_ok" and status == "downloading":
+                dl_cell = '<span class="val-ok">✓ 検証OK</span><div class="status">DL中...</div>'
+            elif status == "failed":
+                last_error = _esc((r["last_error"] or "")[:80])
+                dl_cell = f'<span class="val-ng">失敗</span><div class="val-defects">{last_error}</div>'
+            else:
+                dl_cell = _DL_DONE.format(status_label=status_label)
 
             rows.append(_ROW_TEMPLATE.format(
                 ticket_url=ticket_url,
