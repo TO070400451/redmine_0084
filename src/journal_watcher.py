@@ -20,7 +20,6 @@ from .box.token_manager import TokenManager
 from .box.validator import validate as validate_box
 from .box.waiver_parser import extract_waiver_tests
 from . import dashboard, win_notifier
-from .extractor import write_meta
 from .pattern_matcher import PatternMatcher
 from .redmine_client import RedmineClient
 from .state_store import StateStore
@@ -273,11 +272,6 @@ class JournalWatcher:
                 error="No Box links found",
                 work_dir=str(work_dir),
             )
-            write_meta(
-                work_dir, issue_id, journal_id, ticket_url,
-                matched_pattern, score, [], box_links,
-                None, None, "no_links", "skipped",
-            )
             return
 
         try:
@@ -312,32 +306,14 @@ class JournalWatcher:
             self._store.set_status(
                 journal_id, "failed", error=error_summary, work_dir=str(work_dir)
             )
-            write_meta(
-                work_dir, issue_id, journal_id, ticket_url,
-                matched_pattern, score, [], box_links,
-                box_item_type, box_item_id,
-                download_status, extract_status, error_summary,
-            )
             return
 
-        # 解凍は行わない（ダウンロードのみ）
-        extract_status = "ok"
-
-        final_status = "extracted" if extract_status == "ok" else "failed"
         self._store.set_status(
-            journal_id, final_status, error=error_summary, work_dir=str(work_dir)
-        )
-        write_meta(
-            work_dir, issue_id, journal_id, ticket_url,
-            matched_pattern, score, [], box_links,
-            box_item_type, box_item_id,
-            download_status, extract_status, error_summary,
+            journal_id, "extracted", work_dir=str(work_dir)
         )
         logger.info(
-            "Box work done: journal_id=%d status=%s work_dir=%s",
-            journal_id,
-            final_status,
-            work_dir,
+            "Box work done: journal_id=%d zip=%s/%d.zip",
+            journal_id, self._cfg.work_root, issue_id,
         )
 
 
