@@ -7,7 +7,6 @@ Redmine からポーリングして未処理 journal を検出し、
 
 import json
 import logging
-import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -19,7 +18,7 @@ from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
 from .box.token_manager import TokenManager
 from . import dashboard, win_notifier
-from .extractor import extract_zip, write_meta
+from .extractor import write_meta
 from .pattern_matcher import PatternMatcher
 from .redmine_client import RedmineClient
 from .state_store import StateStore
@@ -260,28 +259,8 @@ class JournalWatcher:
             )
             return
 
-        # ZIP 解凍（ZIP 以外のファイルはそのまま保持）
-        if zip_path.suffix.lower() == ".zip":
-            try:
-                extract_zip(zip_path, extract_dir)
-                extract_status = "ok"
-            except zipfile.BadZipFile as exc:
-                logger.error(
-                    "Bad ZIP for journal_id=%d: %s", journal_id, exc
-                )
-                error_summary = f"BadZipFile: {exc}"
-                extract_status = "bad_zip"
-            except Exception as exc:
-                logger.error(
-                    "Extract failed for journal_id=%d: %s", journal_id, exc
-                )
-                error_summary = str(exc)
-                extract_status = "failed"
-        else:
-            logger.info(
-                "Non-ZIP file downloaded, skipping extraction: %s", zip_path.name
-            )
-            extract_status = "ok"
+        # 解凍は行わない（ダウンロードのみ）
+        extract_status = "ok"
 
         final_status = "extracted" if extract_status == "ok" else "failed"
         self._store.set_status(
