@@ -7,8 +7,10 @@ patterns:
         - "Google認証"
         - "全件Pass"
         - "大橋様"
-        - "[リザルト格納先]"
         - "https://app.box.com/"
+    regex_rules:
+      - regex: "\\[リザルト(の)?格納先\\]"
+        weight: 20
     threshold:
       notify_min_score: 80
 
