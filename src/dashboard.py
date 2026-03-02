@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+_JST = timezone(timedelta(hours=9))
 from pathlib import Path
 
 from .state_store import StateStore
@@ -148,14 +150,19 @@ function pollStatus(journalId, st, btn) {
 def generate(store: StateStore, output_path: str) -> None:
     """ダッシュボード HTML を生成して output_path に保存する。"""
     records = store.get_dashboard_records()
-    updated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    updated_at = datetime.now(_JST).strftime("%Y-%m-%d %H:%M:%S JST")
 
     if not records:
         content = '<p class="empty">検出されたチケットはありません。</p>'
     else:
         rows = []
         for r in records:
-            detected_at = (r["detected_at"] or "")[:19].replace("T", " ")
+            _dt_raw = r["detected_at"] or ""
+            try:
+                _dt = datetime.fromisoformat(_dt_raw).astimezone(_JST)
+                detected_at = _dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                detected_at = _dt_raw[:19].replace("T", " ")
             issue_subject = _esc(r["issue_subject"] or "(タイトル不明)")
             comment_excerpt = _esc(r["comment_excerpt"] or "")
             ticket_url = r["ticket_url"] or ""
