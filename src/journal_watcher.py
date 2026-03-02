@@ -172,20 +172,20 @@ class JournalWatcher:
         ticket_url = f"{self._cfg.redmine_base_url}/issues/{issue_id}"
         detected_at = datetime.now(timezone.utc).isoformat()
 
-        # スコアリング対象テキスト収集
+        # スコアリング対象テキスト収集（コメント本文のみ、件名・説明文は除外）
         notes: str = journal.get("notes", "") or ""
         details_text = _details_to_text(journal.get("details", []))
         subject: str = issue.get("subject", "") or ""
         description: str = issue.get("description", "") or ""
-        full_text = "\n".join([notes, details_text, subject, description])
+        comment_text = "\n".join([notes, details_text])
 
-        # Box リンク抽出
-        box_links = extract_box_links(full_text)
+        # Box リンク抽出（コメント本文のみ）
+        box_links = extract_box_links(comment_text)
         has_box = bool(box_links)
 
-        # パターン判定
+        # パターン判定（コメント本文のみ）
         results = self._matcher.match(
-            texts=[notes, details_text, subject, description],
+            texts=[notes, details_text],
             has_box_link=has_box,
         )
 
