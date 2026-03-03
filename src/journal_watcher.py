@@ -147,7 +147,8 @@ class JournalWatcher:
             journals: list[dict[str, Any]] = issue.get("journals", [])
 
             # 完了コメント確認 → 自動 dismiss
-            if self._should_dismiss(journals):
+            # last_polled_prefix より新しい journal にフレーズがある場合のみ dismiss
+            if self._should_dismiss(journals, since=last_polled_prefix):
                 dismissed = self._store.dismiss_issue(issue_id)
                 if dismissed:
                     logger.info(
@@ -170,7 +171,7 @@ class JournalWatcher:
                 logger.error("Failed to fetch tracked issue %d: %s", issue_id, exc)
                 continue
             journals = issue.get("journals", [])
-            if self._should_dismiss(journals):
+            if self._should_dismiss(journals, since=last_polled_prefix):
                 dismissed = self._store.dismiss_issue(issue_id)
                 if dismissed:
                     logger.info(
@@ -180,9 +181,17 @@ class JournalWatcher:
         # ポーリング時刻を更新
         self._store.set_setting("last_polled_at", now_str)
 
-    def _should_dismiss(self, journals: list[dict[str, Any]]) -> bool:
-        """大橋翼 による完了フレーズを含む journal があれば True を返す。"""
+    def _should_dismiss(self, journals: list[dict[str, Any]], since: str = "") -> bool:
+        """大橋翼 による完了フレーズを含む、since より新しい journal があれば True を返す。
+
+        since: YYYY-MM-DDTHH:MM:SS 形式の文字列。指定時はそれより古い journal を無視する。
+        同一チケット内で新たな依頼が届いた後に dismiss フレーズが来た場合のみ dismiss する。
+        """
         for journal in journals:
+            if since:
+                created_on = (journal.get("created_on") or "")[:19]
+                if created_on and created_on < since:
+                    continue
             user_name = journal.get("user", {}).get("name", "")
             if _DISMISS_USER not in user_name:
                 continue
