@@ -23,6 +23,48 @@ _POLL_INTERVAL_MS = 3_000      # 完了確認の間隔
 
 _BATCH_SIZE = 10  # 同時アップロード上限（これを超えるとハングの報告あり）
 
+# アップロード順: このキーワードを含むカテゴリフォルダを順番にアップロード
+_CATEGORY_ORDER = ["CTS", "STS", "GTS", "VTS"]
+
+
+def _category_sort_key(zip_path: Path) -> tuple[int, str]:
+    """(カテゴリ順インデックス, カテゴリフォルダ名) を返す。"""
+    for part in zip_path.parts:
+        for i, kw in enumerate(_CATEGORY_ORDER):
+            if kw in part:
+                return (i, part)
+    return (len(_CATEGORY_ORDER), "")
+
+
+def _build_batches(zip_files: list[Path]) -> list[list[Path]]:
+    """カテゴリ順・メインログ優先でバッチリストを作成する。
+
+    処理順:
+      1. CTS を含むカテゴリ（番号順）
+      2. STS を含むカテゴリ
+      3. GTS を含むカテゴリ
+      4. VTS を含むカテゴリ
+    各カテゴリ内: メインログを 1 件ずつ → 残りを最大 _BATCH_SIZE 件ずつ
+    """
+    # カテゴリ別に分類
+    groups: dict[tuple[int, str], list[Path]] = {}
+    for z in zip_files:
+        key = _category_sort_key(z)
+        groups.setdefault(key, []).append(z)
+
+    batches: list[list[Path]] = []
+    for key in sorted(groups.keys()):
+        files = groups[key]
+        main = sorted([z for z in files if _is_main_log(z)], key=lambda z: z.name)
+        others = sorted([z for z in files if not _is_main_log(z)], key=lambda z: str(z))
+
+        for mz in main:
+            batches.append([mz])
+        for i in range(0, len(others), _BATCH_SIZE):
+            batches.append(others[i : i + _BATCH_SIZE])
+
+    return batches
+
 
 def upload_zips(
     zip_files: list[Path],
@@ -31,9 +73,8 @@ def upload_zips(
     """
     ZIP ファイルのリストを partner portal にアップロードする。
 
-    バッチ制御:
-      - 01_CTS Results 配下かつ Modules フォルダ外の ZIP（メインログ）は 1 件ずつ
-      - その他は最大 _BATCH_SIZE 件ずつまとめてアップロード
+    アップロード順: CTS → STS → GTS → VTS（各カテゴリ内でメインログ先頭）
+    バッチ制御: メインログは 1 件ずつ、その他は最大 _BATCH_SIZE 件ずつ
 
     Args:
         zip_files:   アップロードする ZIP ファイルのリスト
@@ -42,23 +83,15 @@ def upload_zips(
     Returns:
         {zip_path_str: "ok" | "rejected:<message>" | "error:<message>"}
     """
-    # メインログ（大容量）とその他に分類
-    main_files = [z for z in zip_files if _is_main_log(z)]
-    other_files = [z for z in zip_files if not _is_main_log(z)]
-
-    # バッチリスト作成: メインは1件ずつ、その他は最大 _BATCH_SIZE 件
-    batches: list[list[Path]] = [[z] for z in main_files]
-    for i in range(0, len(other_files), _BATCH_SIZE):
-        batches.append(other_files[i : i + _BATCH_SIZE])
+    batches = _build_batches(zip_files)
 
     if not batches:
         return {}
 
     logger.info(
-        "Upload plan: %d main-log batch(es), %d other batch(es) (batch_size=%d)",
-        len(main_files),
-        len(range(0, len(other_files), _BATCH_SIZE)),
-        _BATCH_SIZE,
+        "Upload plan: %d batch(es), %d file(s) total",
+        len(batches),
+        sum(len(b) for b in batches),
     )
 
     results: dict[str, str] = {}
@@ -101,13 +134,14 @@ def upload_zips(
 
 
 def _is_main_log(zip_path: Path) -> bool:
-    """01_CTS Results 配下かつ Modules サブフォルダ外にある ZIP = メインログ（大容量）。"""
+    """CTS カテゴリ配下かつ Modules サブフォルダ外にある ZIP = メインログ（大容量）。"""
     parts = zip_path.parts
+    # CTS を含むカテゴリフォルダを探す
     try:
-        cts_idx = next(i for i, p in enumerate(parts) if p == "01_CTS Results")
+        cts_idx = next(i for i, p in enumerate(parts) if "CTS" in p)
     except StopIteration:
         return False
-    # 01_CTS Results/ 以降のパスに "Modules" が含まれていなければメインログ
+    # そのカテゴリフォルダ以降のパスに "Modules" が含まれていなければメインログ
     return "Modules" not in parts[cts_idx + 1 :]
 
 
