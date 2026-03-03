@@ -235,5 +235,6 @@ def collect_result_zips(
                         download_file(child["id"], child["name"], token, dest_dir / child["name"])
                         count += 1
             else:
-                count += collect_result_zips(item["id"], token, dest_dir)
+                # サブフォルダ名を保持して再帰（Modules 等の階層を dest_dir 以下に反映）
+                count += collect_result_zips(item["id"], token, dest_dir / item["name"])
     return count
