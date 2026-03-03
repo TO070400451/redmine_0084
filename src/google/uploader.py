@@ -134,14 +134,14 @@ def upload_zips(
 
 
 def _is_main_log(zip_path: Path) -> bool:
-    """CTS カテゴリ配下かつ Modules サブフォルダ外にある ZIP = メインログ（大容量）。"""
+    """01_CTS 配下かつ Modules サブフォルダ外にある ZIP = メインログ（大容量）。
+    大容量なのは 01_CTS カテゴリのみのため、他カテゴリは対象外。
+    """
     parts = zip_path.parts
-    # CTS を含むカテゴリフォルダを探す
     try:
-        cts_idx = next(i for i, p in enumerate(parts) if "CTS" in p)
+        cts_idx = next(i for i, p in enumerate(parts) if p.startswith("01_CTS"))
     except StopIteration:
         return False
-    # そのカテゴリフォルダ以降のパスに "Modules" が含まれていなければメインログ
     return "Modules" not in parts[cts_idx + 1 :]
 
 
