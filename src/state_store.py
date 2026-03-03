@@ -40,6 +40,9 @@ _MIGRATE = [
     "ALTER TABLE journal_events ADD COLUMN comment_excerpt TEXT",
     "ALTER TABLE journal_events ADD COLUMN validation_status TEXT",
     "ALTER TABLE journal_events ADD COLUMN validation_defects_json TEXT",
+    "ALTER TABLE journal_events ADD COLUMN project_name TEXT",
+    "ALTER TABLE journal_events ADD COLUMN upload_status TEXT",
+    "ALTER TABLE journal_events ADD COLUMN upload_results_json TEXT",
 ]
 
 
@@ -88,6 +91,7 @@ class StateStore:
         box_links: list[str],
         issue_subject: Optional[str] = None,
         comment_excerpt: Optional[str] = None,
+        project_name: Optional[str] = None,
     ) -> None:
         with self._conn() as conn:
             conn.execute(
@@ -95,8 +99,8 @@ class StateStore:
                 INSERT INTO journal_events
                   (journal_id, issue_id, detected_at, ticket_url,
                    matched_pattern, score, box_links_json, status, decision,
-                   issue_subject, comment_excerpt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'detected', 'pending', ?, ?)
+                   issue_subject, comment_excerpt, project_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'detected', 'pending', ?, ?, ?)
                 """,
                 (
                     journal_id,
@@ -108,6 +112,7 @@ class StateStore:
                     json.dumps(box_links, ensure_ascii=False),
                     issue_subject,
                     comment_excerpt,
+                    project_name,
                 ),
             )
             conn.commit()
@@ -142,10 +147,12 @@ class StateStore:
         logger.info("Dismissed journal_id=%d", journal_id)
 
     def dismiss_issue(self, issue_id: int) -> int:
-        """issue_id に紐づく全非 dismissed レコードを dismissed にする。変更件数を返す。"""
+        """issue_id に紐づく全非 dismissed レコードを dismissed にする。
+        処理中（decided/validating/downloading）のレコードは除外する。変更件数を返す。"""
         with self._conn() as conn:
             cur = conn.execute(
-                "UPDATE journal_events SET status='dismissed' WHERE issue_id=? AND status != 'dismissed'",
+                """UPDATE journal_events SET status='dismissed'
+                   WHERE issue_id=? AND status NOT IN ('dismissed', 'decided', 'validating', 'downloading')""",
                 (issue_id,),
             )
             conn.commit()
@@ -224,6 +231,39 @@ class StateStore:
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
             )
             conn.commit()
+
+    def set_upload_status(
+        self,
+        journal_id: int,
+        status: str,
+        results: dict | None = None,
+    ) -> None:
+        """upload_status を更新する。status: 'uploading'|'ok'|'rejected'|'failed'"""
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE journal_events
+                SET upload_status=?, upload_results_json=?
+                WHERE journal_id=?
+                """,
+                (
+                    status,
+                    json.dumps(results, ensure_ascii=False) if results is not None else None,
+                    journal_id,
+                ),
+            )
+            conn.commit()
+        logger.info("Upload status: journal_id=%d status=%s", journal_id, status)
+
+    def get_extracted_pending_upload(self) -> list[sqlite3.Row]:
+        """status='extracted' かつ upload_status が未設定のレコードを返す。"""
+        with self._conn() as conn:
+            return conn.execute(
+                """
+                SELECT * FROM journal_events
+                WHERE status = 'extracted' AND upload_status IS NULL
+                """
+            ).fetchall()
 
     def get_active_issue_ids(self) -> list[int]:
         """dismissed/skip 以外の status を持つ issue_id 一覧を返す（重複なし）。"""

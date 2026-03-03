@@ -84,9 +84,12 @@ class Config:
     )
     db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "state.db"))
 
-    # Optional
+    # Google Upload
     google_upload_mode: str = field(
         default_factory=lambda: os.getenv("GOOGLE_UPLOAD_MODE", "none")
+    )
+    chrome_profile_dir: str = field(
+        default_factory=lambda: os.getenv("CHROME_PROFILE_DIR", "~/.playwright_profile/google_upload")
     )
 
     # patterns.yaml path (relative to project root or absolute)

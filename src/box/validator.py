@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from collections import defaultdict
 
+import requests
+
 # モジュールキーから ABI ラベル（例: " (arm64-v8a)"）を除去するための正規表現
 _ABI_LABEL_RE = re.compile(r'\s*\((arm64-v8a|armeabi-v7a|x86_64|x86)\)$')
 
@@ -49,6 +51,10 @@ def validate(
     """
     try:
         folder_id = resolve_folder_id(box_url, token)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 401:
+            raise
+        return ValidationResult(ok=False, defects=[f"Box URL の解決に失敗: {e}"])
     except Exception as e:
         return ValidationResult(ok=False, defects=[f"Box URL の解決に失敗: {e}"])
     return _validate_folder(folder_id, token, waiver_tests=waiver_tests or set())
@@ -64,6 +70,10 @@ def _validate_folder(folder_id: str, token: str, waiver_tests: set[str] = set())
     # 1. トップフォルダ名チェック
     try:
         name = get_folder_name(folder_id, token)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 401:
+            raise
+        return ValidationResult(ok=False, defects=[f"フォルダ情報の取得に失敗: {e}"])
     except Exception as e:
         return ValidationResult(ok=False, defects=[f"フォルダ情報の取得に失敗: {e}"])
 
@@ -79,6 +89,10 @@ def _validate_folder(folder_id: str, token: str, waiver_tests: set[str] = set())
     # 2. test_result.html を収集
     try:
         html_files = find_files(folder_id, token, exclude_top=EXCLUDE_FOLDERS)
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 401:
+            raise
+        return ValidationResult(ok=False, defects=[f"HTML ファイル検索に失敗: {e}"])
     except Exception as e:
         return ValidationResult(ok=False, defects=[f"HTML ファイル検索に失敗: {e}"])
 
@@ -183,9 +197,7 @@ def _check_fail_resolution(parsed: list[dict], waiver_tests: set[str] = set()) -
             if item["is_rerun"]:
                 continue
             for module_label, original_tests in item["failed_tests"].items():
-                # Waiver 除外
-                tests = [t for t in original_tests if t not in waiver_tests]
-                if not tests:
+                if not original_tests:
                     continue
 
                 # ABI ラベル（例: " (arm64-v8a)"）と "[instant]" 等を除去して再試行フォルダ名と照合
@@ -193,7 +205,11 @@ def _check_fail_resolution(parsed: list[dict], waiver_tests: set[str] = set()) -
 
                 if module_label in rerun_modules:
                     # パターン1: モジュール名完全一致
-                    still_fail = [t for t in tests if t in rerun_failures[module_label]]
+                    # Waiver はFAIL（再試行後も失敗）している場合のみ除外
+                    still_fail = [
+                        t for t in original_tests
+                        if t in rerun_failures[module_label] and t not in waiver_tests
+                    ]
                     if still_fail:
                         defects.append(
                             f"③ [{category}] {module_label}: "
@@ -204,7 +220,11 @@ def _check_fail_resolution(parsed: list[dict], waiver_tests: set[str] = set()) -
 
                 elif module_base in rerun_modules:
                     # パターン2: [instant] 等サフィックスなしで一致
-                    still_fail = [t for t in tests if t in rerun_failures[module_base]]
+                    # Waiver はFAIL（再試行後も失敗）している場合のみ除外
+                    still_fail = [
+                        t for t in original_tests
+                        if t in rerun_failures[module_base] and t not in waiver_tests
+                    ]
                     if still_fail:
                         defects.append(
                             f"③ [{category}] {module_label}: "
@@ -217,13 +237,15 @@ def _check_fail_resolution(parsed: list[dict], waiver_tests: set[str] = set()) -
                     # パターン3: テストごとにクラス名（"#" 前）で再試行フォルダを探す
                     still_fail = []
                     not_retried = []
-                    for test in tests:
+                    for test in original_tests:
                         test_class = test.split("#")[0] if "#" in test else ""
                         if test_class in rerun_modules:
-                            if test in rerun_failures[test_class]:
+                            # Waiver はFAIL（再試行後も失敗）している場合のみ除外
+                            if test in rerun_failures[test_class] and test not in waiver_tests:
                                 still_fail.append(test)
-                            # else: 再試行で解消済み → 瑕疵なし
+                            # else: 再試行で解消済み、またはwaiver適用 → 瑕疵なし
                         else:
+                            # 未再試行はwaiver対象外（FAILしていないため除外不可）
                             not_retried.append(test)
 
                     if still_fail:

@@ -18,7 +18,7 @@ from .box.shared_item import SharedItemResolver
 from .box.zip_downloader import ZipDownloader
 from .box.token_manager import TokenManager
 from .box.validator import validate as validate_box
-from .box.individual_downloader import download_bts_folder, download_from_named_ancestor
+from .box.individual_downloader import download_bts_folder, download_from_named_ancestor, list_folder_items, collect_result_zips
 from .box.waiver_parser import extract_waiver_tests
 from . import dashboard, win_notifier
 from .pattern_matcher import PatternMatcher
@@ -26,6 +26,9 @@ from .redmine_client import RedmineClient
 from .state_store import StateStore
 
 logger = logging.getLogger(__name__)
+
+_EXCLUDE_DL_FOLDERS = {"06_BTS_Images"}
+_DIRECT_ZIP_CATEGORIES = {"02_CTS Verifier"}  # results サブフォルダを持たずフォルダ直下に ZIP があるカテゴリ
 
 _DISMISS_USER = "大橋翼"
 _DISMISS_PHRASES = [
@@ -71,6 +74,16 @@ class JournalWatcher:
             return self._token_mgr.refresh()
         return self._cfg.box_access_token
 
+    def _validate_box(self, shared_link: str, waiver_tests: set[str]):
+        """validate_box を呼び出し、401 時にトークンリフレッシュして1回リトライする。"""
+        try:
+            return validate_box(shared_link, self._box_token(), waiver_tests=waiver_tests)
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401:
+                logger.info("Box token expired during validation, refreshing...")
+                return validate_box(shared_link, self._box_token_refresh(), waiver_tests=waiver_tests)
+            raise
+
     # ------------------------------------------------------------------
     # Public: 1回の処理サイクル
     # ------------------------------------------------------------------
@@ -80,7 +93,7 @@ class JournalWatcher:
         logger.info("--- Poll cycle start ---")
         self._detect_and_notify()
         self._process_work_decisions()
-        dashboard.generate(self._store, self._cfg.dashboard_path)
+        dashboard.generate(self._store, self._cfg.dashboard_path, self._cfg.google_upload_mode)
         logger.info("--- Poll cycle end ---")
 
     # ------------------------------------------------------------------
@@ -192,6 +205,7 @@ class JournalWatcher:
         best = results[0] if results else None
         comment_excerpt = notes[:200] if notes else details_text[:200]
 
+        project_name: str = (issue.get("project") or {}).get("name") or ""
         self._store.insert_detected(
             journal_id=journal_id,
             issue_id=issue_id,
@@ -202,6 +216,7 @@ class JournalWatcher:
             box_links=box_links,
             issue_subject=subject,
             comment_excerpt=comment_excerpt,
+            project_name=project_name,
         )
 
         if best is None:
@@ -220,7 +235,7 @@ class JournalWatcher:
         self._store.mark_notified(journal_id, notified_at)
 
         # ダッシュボード更新
-        dashboard.generate(self._store, self._cfg.dashboard_path)
+        dashboard.generate(self._store, self._cfg.dashboard_path, self._cfg.google_upload_mode)
 
     # ------------------------------------------------------------------
     # Step 2: work 決定済みの Box 処理
@@ -262,7 +277,7 @@ class JournalWatcher:
         if should_validate and shared_link:
             self._store.set_status(journal_id, "validating")
             try:
-                val = validate_box(shared_link, self._box_token(), waiver_tests=waiver_tests)
+                val = self._validate_box(shared_link, waiver_tests)
             except Exception as e:
                 logger.error("Validation error journal_id=%d: %s", journal_id, e)
                 val_ok = False
@@ -348,9 +363,39 @@ class JournalWatcher:
                     else:
                         raise
             else:
-                # 全アイテムを1つの ZIP にまとめてダウンロード（ファイル名=チケット番号）
+                # フォルダの直下子を展開し、除外フォルダを除いて ZIP ダウンロード
+                # （00_提出 自体は最上位にせず、その子が最上位になるようにする）
+                dl_items: list[dict] = []
+                for item in resolved_items:
+                    if item["type"] == "folder":
+                        children = list_folder_items(item["id"], token)
+                        dl_items.extend(
+                            c for c in children if c["name"] not in _EXCLUDE_DL_FOLDERS
+                        )
+                    else:
+                        dl_items.append(item)
+                logger.info(
+                    "ZIP download: %d items (excluded: %s)",
+                    len(dl_items), _EXCLUDE_DL_FOLDERS,
+                )
+
+                # 全体 ZIP より先に: results フォルダ直下の ZIP のみを収集したフォルダを作成
+                upload_dir = raw_dir / f"{issue_id}_upload"
+                for item in dl_items:
+                    if item["type"] != "folder":
+                        continue
+                    is_direct = item["name"] in _DIRECT_ZIP_CATEGORIES
+                    cat_count = collect_result_zips(
+                        item["id"], token, upload_dir / item["name"], direct=is_direct
+                    )
+                    if cat_count:
+                        logger.info(
+                            "Upload ZIP collected: %d files -> %s/%s",
+                            cat_count, upload_dir.name, item["name"],
+                        )
+
                 downloader = ZipDownloader(token, "", self._cfg.box_shared_link_password)
-                downloader.download_items(resolved_items, raw_dir, f"{issue_id}.zip")
+                downloader.download_items(dl_items, raw_dir, f"{issue_id}.zip")
             download_status = "ok"
         except Exception as exc:
             logger.error("Box download failed for journal_id=%d: %s", journal_id, exc, exc_info=True)
@@ -367,6 +412,62 @@ class JournalWatcher:
         logger.info(
             "Box work done: journal_id=%d dest=%s",
             journal_id, self._cfg.work_root,
+        )
+
+
+
+    def handle_google_upload_row(self, row: Any) -> None:
+        """ダッシュボードのアップロードボタンから呼ばれる。row は journal_events の行。"""
+        journal_id: int = row["journal_id"]
+        issue_id: int = row["issue_id"]
+        work_dir = Path(row["work_dir"] or self._cfg.work_root)
+        self._handle_google_upload(journal_id, issue_id, work_dir)
+        dashboard.generate(self._store, self._cfg.dashboard_path, self._cfg.google_upload_mode)
+
+    def _handle_google_upload(
+        self, journal_id: int, issue_id: int, work_dir: Path
+    ) -> None:
+        """upload_dir 以下の ZIP を Google partner portal にアップロードする。"""
+        from .google.uploader import upload_zips
+
+        upload_dir = work_dir / f"{issue_id}_upload"
+        zip_files = sorted(upload_dir.rglob("*.zip")) if upload_dir.exists() else []
+
+        if not zip_files:
+            logger.warning(
+                "No ZIP files in upload_dir for journal_id=%d (%s)", journal_id, upload_dir
+            )
+            self._store.set_upload_status(journal_id, "failed", {"error": "アップロードファイルが見つかりません"})
+            return
+
+        logger.info("Google upload: journal_id=%d, %d files", journal_id, len(zip_files))
+        self._store.set_upload_status(journal_id, "uploading")
+        dashboard.generate(self._store, self._cfg.dashboard_path, self._cfg.google_upload_mode)
+
+        profile_dir = str(Path(self._cfg.chrome_profile_dir).expanduser())
+        try:
+            results = upload_zips(zip_files, profile_dir)
+        except Exception as exc:
+            logger.error(
+                "Google upload failed for journal_id=%d: %s", journal_id, exc, exc_info=True
+            )
+            self._store.set_upload_status(journal_id, "failed", {"error": str(exc)})
+            return
+
+        rejected = {k: v for k, v in results.items() if v.startswith("rejected:")}
+        failed = {k: v for k, v in results.items() if v.startswith("error:")}
+
+        if rejected:
+            final_status = "rejected"
+        elif failed:
+            final_status = "failed"
+        else:
+            final_status = "ok"
+
+        self._store.set_upload_status(journal_id, final_status, results)
+        logger.info(
+            "Google upload done: journal_id=%d status=%s rejected=%d failed=%d",
+            journal_id, final_status, len(rejected), len(failed),
         )
 
 

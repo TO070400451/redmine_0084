@@ -29,7 +29,7 @@ def build_components(cfg: Config) -> JournalWatcher:
     matcher = PatternMatcher(cfg.patterns_yaml)
     watcher = JournalWatcher(cfg=cfg, store=store, redmine=redmine, matcher=matcher)
 
-    web_server.init(cfg, store, watcher._handle_box_work)
+    web_server.init(cfg, store, watcher._handle_box_work, watcher.handle_google_upload_row)
 
     return watcher
 

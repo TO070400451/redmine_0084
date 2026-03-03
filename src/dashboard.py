@@ -18,7 +18,7 @@ _HTML_TEMPLATE = """\
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="30">
+  <meta http-equiv="refresh" content="60">
   <title>Redmine 監視ダッシュボード</title>
   <style>
     body {{ font-family: 'Segoe UI', sans-serif; margin: 24px; background: #f5f5f5; }}
@@ -36,6 +36,9 @@ _HTML_TEMPLATE = """\
     .dl-btn {{ padding: 4px 12px; background: #4a6fa5; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; }}
     .dl-btn:hover {{ background: #3a5f95; }}
     .dl-btn:disabled {{ background: #aaa; cursor: default; }}
+    .ul-btn {{ padding: 4px 12px; background: #2a7a2a; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em; margin-top: 4px; }}
+    .ul-btn:hover {{ background: #1a6a1a; }}
+    .ul-btn:disabled {{ background: #aaa; cursor: default; }}
     .del-btn {{ padding: 4px 8px; background: #e0e0e0; color: #666; border: none; border-radius: 4px; cursor: pointer; font-size: 0.8em; }}
     .del-btn:hover {{ background: #c00; color: #fff; }}
     .status {{ font-size: 0.8em; color: #888; margin-top: 4px; }}
@@ -43,11 +46,15 @@ _HTML_TEMPLATE = """\
     .val-ng {{ color: #c00; font-size: 0.85em; }}
     .val-defects {{ margin-top: 4px; font-size: 0.78em; color: #c00; white-space: pre-wrap; word-break: break-all; max-width: 320px; }}
     .val-spin {{ color: #888; font-size: 0.85em; }}
+    .ul-ok {{ color: #2a7a2a; font-size: 0.85em; }}
+    .ul-ng {{ color: #c00; font-size: 0.85em; }}
+    .ul-running {{ color: #888; font-size: 0.85em; }}
+    .ul-detail {{ margin-top: 4px; font-size: 0.78em; color: #c00; white-space: pre-wrap; word-break: break-all; max-width: 320px; }}
   </style>
 </head>
 <body>
   <h1>Redmine 監視ダッシュボード</h1>
-  <div class="updated">最終更新: {updated_at}（30秒ごとに自動更新）</div>
+  <div class="updated">最終更新: {updated_at}（1分ごとに自動更新）</div>
   {content}
 </body>
 </html>
@@ -55,9 +62,9 @@ _HTML_TEMPLATE = """\
 
 _ROW_TEMPLATE = """\
     <tr>
+      <td>{project_name}</td>
       <td><a href="{ticket_url}" target="_blank">#{issue_id}</a></td>
       <td>{issue_subject}</td>
-      <td>{detected_at}</td>
       <td class="excerpt">{comment_excerpt}</td>
       <td>{dl_cell}</td>
       <td><button class="del-btn" onclick="dismissRecord({journal_id}, this)">削除</button></td>
@@ -147,7 +154,50 @@ function pollStatus(journalId, st, btn) {
 """
 
 
-def generate(store: StateStore, output_path: str) -> None:
+_UL_SCRIPT = """
+<script>
+async function triggerUpload(journalId, btn) {
+  btn.disabled = true;
+  const st = document.getElementById('ul-st-' + journalId);
+  if (st) st.textContent = '開始中...';
+  try {
+    const resp = await fetch('/upload/' + journalId, {method: 'POST'});
+    const data = await resp.json();
+    if (resp.ok) {
+      if (st) st.textContent = 'アップロード中...';
+      pollUploadStatus(journalId, st, btn);
+    } else {
+      if (st) st.textContent = 'エラー: ' + (data.detail || '不明');
+      btn.disabled = false;
+    }
+  } catch(e) {
+    if (st) st.textContent = 'エラー';
+    btn.disabled = false;
+  }
+}
+function pollUploadStatus(journalId, st, btn) {
+  const iv = setInterval(async () => {
+    try {
+      const resp = await fetch('/status/' + journalId);
+      const data = await resp.json();
+      const us = data.upload_status;
+      if (us === 'ok') {
+        clearInterval(iv);
+        window.location.reload();
+      } else if (us === 'rejected' || us === 'failed') {
+        clearInterval(iv);
+        window.location.reload();
+      } else if (us === 'uploading') {
+        if (st) st.textContent = 'アップロード中...';
+      }
+    } catch(e) { clearInterval(iv); }
+  }, 4000);
+}
+</script>
+"""
+
+
+def generate(store: StateStore, output_path: str, google_upload_mode: str = "none") -> None:
     """ダッシュボード HTML を生成して output_path に保存する。"""
     records = store.get_dashboard_records()
     updated_at = datetime.now(_JST).strftime("%Y-%m-%d %H:%M:%S JST")
@@ -168,6 +218,7 @@ def generate(store: StateStore, output_path: str) -> None:
             ticket_url = r["ticket_url"] or ""
             issue_id = r["issue_id"]
             journal_id = r["journal_id"]
+            project_name = _esc(r["project_name"] or "")
             status = r["status"] or ""
             has_box = bool(r["box_links_json"] and r["box_links_json"] != "[]")
 
@@ -183,13 +234,40 @@ def generate(store: StateStore, output_path: str) -> None:
                 dl_cell = '<span class="val-spin">検証中...</span>'
             elif validation_status == "validation_ng":
                 defects = json.loads(validation_defects_json or "[]")
-                defect_lines = "\n".join(f"・{_esc(d.split(chr(10))[0])}" for d in defects)
+                defect_lines = "\n".join(f"・{_esc(d)}" for d in defects)
                 dl_cell = (
                     '<span class="val-ng">❌ 瑕疵あり</span>'
                     + (f'<div class="val-defects">{defect_lines}</div>' if defect_lines else "")
                 )
             elif validation_status == "validation_ok" and status == "extracted":
-                dl_cell = '<span class="val-ok">✓ 完了</span>'
+                upload_status = r["upload_status"] if "upload_status" in r.keys() else None
+                upload_results_json = r["upload_results_json"] if "upload_results_json" in r.keys() else None
+                dl_cell = '<span class="val-ok">✓ 検証済</span>'
+
+                if google_upload_mode != "none":
+                    if upload_status is None:
+                        dl_cell += (
+                            f'<br><button class="ul-btn" onclick="triggerUpload({journal_id}, this)">アップロード</button>'
+                            f'<div class="status" id="ul-st-{journal_id}"></div>'
+                        )
+                    elif upload_status == "uploading":
+                        dl_cell += '<br><span class="ul-running">↑ アップロード中...</span>'
+                    elif upload_status == "ok":
+                        dl_cell += '<br><span class="ul-ok">✓ アップロード完了</span>'
+                    elif upload_status in ("rejected", "failed"):
+                        upload_results = json.loads(upload_results_json or "{}")
+                        detail_lines = "\n".join(
+                            f"・{Path(k).name}: {_esc(v)}"
+                            for k, v in upload_results.items()
+                            if not v.startswith("ok")
+                        )
+                        label = "リジェクト" if upload_status == "rejected" else "アップロード失敗"
+                        dl_cell += (
+                            f'<br><span class="ul-ng">❌ {label}</span>'
+                            + (f'<div class="ul-detail">{detail_lines}</div>' if detail_lines else "")
+                            + f'<button class="ul-btn" onclick="triggerUpload({journal_id}, this)" style="margin-top:4px">再試行</button>'
+                            + f'<div class="status" id="ul-st-{journal_id}"></div>'
+                        )
             elif validation_status == "validation_ok" and status == "downloading":
                 dl_cell = (
                     f'<button class="dl-btn" onclick="triggerDownload({journal_id}, this)">再試行</button>'
@@ -210,20 +288,22 @@ def generate(store: StateStore, output_path: str) -> None:
                 dl_cell = _DL_DONE.format(status_label=status_label)
 
             rows.append(_ROW_TEMPLATE.format(
+                project_name=project_name,
                 ticket_url=ticket_url,
                 issue_id=issue_id,
                 issue_subject=issue_subject,
-                detected_at=detected_at,
                 comment_excerpt=comment_excerpt,
                 journal_id=journal_id,
                 dl_cell=dl_cell,
             ))
+        ul_script = _UL_SCRIPT if google_upload_mode != "none" else ""
         content = (
             "<table>"
-            "<tr><th>#</th><th>タイトル</th><th>検出日時</th><th>コメント（抜粋）</th><th>Box</th><th></th></tr>"
+            "<tr><th>プロジェクト</th><th>#</th><th>タイトル</th><th>コメント（抜粋）</th><th>Box</th><th></th></tr>"
             + "".join(rows)
             + "</table>"
             + _DL_SCRIPT
+            + ul_script
         )
 
     html = _HTML_TEMPLATE.format(updated_at=updated_at, content=content)

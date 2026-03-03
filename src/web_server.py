@@ -20,21 +20,23 @@ app = FastAPI()
 
 _store: Optional[StateStore] = None
 _cfg: Optional[Config] = None
-_download_callback = None  # journal_id を受け取る関数
+_download_callback = None   # row を受け取る関数
+_upload_callback = None     # row を受け取る関数
 
 
-def init(cfg: Config, store: StateStore, download_callback) -> None:
-    global _store, _cfg, _download_callback
+def init(cfg: Config, store: StateStore, download_callback, upload_callback=None) -> None:
+    global _store, _cfg, _download_callback, _upload_callback
     _cfg = cfg
     _store = store
     _download_callback = download_callback
+    _upload_callback = upload_callback
 
 
 @app.get("/", response_class=HTMLResponse)
 def get_dashboard():
     if _cfg is None or _store is None:
         raise HTTPException(status_code=503, detail="Not initialized")
-    dashboard.generate(_store, _cfg.dashboard_path)
+    dashboard.generate(_store, _cfg.dashboard_path, _cfg.google_upload_mode)
     from pathlib import Path
     html = Path(_cfg.dashboard_path).read_text(encoding="utf-8")
     return HTMLResponse(content=html)
@@ -73,6 +75,46 @@ def trigger_download(journal_id: int):
     return {"status": "started", "journal_id": journal_id}
 
 
+@app.post("/upload/{journal_id}")
+def trigger_upload(journal_id: int):
+    from pathlib import Path
+
+    if _store is None or _upload_callback is None:
+        raise HTTPException(status_code=503, detail="Upload not configured")
+
+    row = _store.get(journal_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Journal not found")
+    if row["status"] != "extracted":
+        raise HTTPException(status_code=400, detail="Download not complete")
+
+    current_ul = row["upload_status"] if "upload_status" in row.keys() else None
+    if current_ul == "uploading":
+        return {"status": "uploading", "journal_id": journal_id}
+    if current_ul == "ok":
+        return {"status": "ok", "journal_id": journal_id}
+
+    # ファイル存在チェック
+    work_dir = Path(row["work_dir"] or _cfg.work_root)
+    upload_dir = work_dir / f"{row['issue_id']}_upload"
+    zip_files = sorted(upload_dir.rglob("*.zip")) if upload_dir.exists() else []
+    if not zip_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"アップロードファイルが見つかりません: {upload_dir}",
+        )
+
+    thread = threading.Thread(
+        target=_upload_callback,
+        args=(row,),
+        daemon=True,
+        name=f"google-ul-{journal_id}",
+    )
+    thread.start()
+    logger.info("Google upload triggered: journal_id=%d (%d files)", journal_id, len(zip_files))
+    return {"status": "started", "journal_id": journal_id}
+
+
 @app.post("/dismiss/{journal_id}")
 def dismiss_record(journal_id: int):
     if _store is None:
@@ -80,7 +122,7 @@ def dismiss_record(journal_id: int):
     row = _store.get(journal_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Journal not found")
-    _store.dismiss(journal_id)
+    _store.dismiss_issue(row["issue_id"])
     return {"status": "dismissed", "journal_id": journal_id}
 
 
@@ -96,6 +138,7 @@ def get_status(journal_id: int):
         "journal_id": journal_id,
         "status": row["status"],
         "validation_status": row["validation_status"] if "validation_status" in keys else None,
+        "upload_status": row["upload_status"] if "upload_status" in keys else None,
         "last_error": (row["last_error"] or "")[:120] if "last_error" in keys else None,
     }
 
