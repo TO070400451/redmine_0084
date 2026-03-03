@@ -195,3 +195,45 @@ def download_from_named_ancestor(
                 logger.info("GTS: skipping subfolder '%s'", item["name"])
         elif item["type"] == "file":
             download_file(item["id"], item["name"], token, top_dest / item["name"])
+
+
+_RESULT_FOLDER_NAMES: frozenset[str] = frozenset({"results"})
+
+
+def collect_result_zips(
+    folder_id: str,
+    token: str,
+    dest_dir: Path,
+    *,
+    direct: bool = False,
+) -> int:
+    """results フォルダ直下にある ZIP ファイルを dest_dir に収集する。
+
+    Args:
+        direct: True のとき folder_id のフォルダ直下の ZIP を直接収集する（CTS Verifier 等）。
+                False のとき results フォルダを再帰探索して ZIP を収集する（通常）。
+    Returns:
+        収集した ZIP ファイル数。
+    """
+    count = 0
+    items = list_folder_items(folder_id, token)
+
+    if direct:
+        for item in items:
+            if item["type"] == "file" and item["name"].lower().endswith(".zip"):
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                download_file(item["id"], item["name"], token, dest_dir / item["name"])
+                count += 1
+    else:
+        for item in items:
+            if item["type"] != "folder":
+                continue
+            if item["name"] in _RESULT_FOLDER_NAMES:
+                for child in list_folder_items(item["id"], token):
+                    if child["type"] == "file" and child["name"].lower().endswith(".zip"):
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        download_file(child["id"], child["name"], token, dest_dir / child["name"])
+                        count += 1
+            else:
+                count += collect_result_zips(item["id"], token, dest_dir)
+    return count

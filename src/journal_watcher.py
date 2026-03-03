@@ -119,9 +119,24 @@ class JournalWatcher:
             logger.error("Failed to fetch issues: %s", exc)
             return
 
+        # Redmine の updated_on フィルタは日付単位のため、
+        # 正確な last_polled_at より古い issue はここで弾く
+        # （例: 今日更新済みだが前回ポーリング前の issue を除外）
+        # Redmine の updated_on 形式: "2026-03-03T07:34:21Z"
+        # last_polled 形式: "2026-03-03T07:13:36.714058+00:00"
+        # 先頭19文字（YYYY-MM-DDTHH:MM:SS）で文字列比較する
+        last_polled_prefix = last_polled[:19]
+
         fetched_ids: set[int] = set()
+        skipped = 0
         for issue_summary in issues:
             issue_id: int = issue_summary["id"]
+            # updated_on が last_polled より古ければ新規 journal はないのでスキップ
+            updated_on: str = (issue_summary.get("updated_on") or "")[:19]
+            if updated_on and updated_on < last_polled_prefix:
+                skipped += 1
+                continue
+
             fetched_ids.add(issue_id)
             try:
                 issue = self._redmine.get_issue_with_journals(issue_id)
@@ -141,6 +156,9 @@ class JournalWatcher:
 
             for journal in journals:
                 self._process_journal(issue, journal)
+
+        if skipped:
+            logger.info("Skipped %d issues (updated_on < last_polled_at)", skipped)
 
         # 追跡中チケットが取得範囲外でも dismiss チェックする
         for issue_id in self._store.get_active_issue_ids():

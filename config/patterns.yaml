@@ -2,6 +2,8 @@ patterns:
   - pattern_id: "google_auth_result"
     name: "Google認証試験結果通知"
     description: "5ワード中4つ以上ヒットした場合に通知"
+    veto_keywords:
+      - "現状報告"
     keywords:
       should:
         - "Google認証"

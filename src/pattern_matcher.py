@@ -72,6 +72,12 @@ class PatternMatcher:
                     score += bonus
                     evidence.append(f"[box_link] +{bonus}")
 
+            for kw in pat.get("veto_keywords", []):
+                if kw in combined:
+                    score = 0
+                    evidence.append(f"[veto] {kw}")
+                    break
+
             score = max(0, min(100, score))
 
             if score >= notify_min:
